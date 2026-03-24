@@ -1,6 +1,6 @@
-# kultivate_new_ver
+# kultivateNewVers
 
-A new Flutter project.
+A Flutter project (kultivate_new_ver).
 
 ## Getting Started
 
