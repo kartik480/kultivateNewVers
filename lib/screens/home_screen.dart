@@ -9,14 +9,17 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  // Draggable logic variables
   double _navBarHeight = 120.0;
   final double _minHeight = 120.0;
 
-  // Calculates opacity for the home content (fades to 0 as we drag down)
   double _calculateOpacity(double maxHeight) {
     double opacity = 1.0 - ((_navBarHeight - _minHeight) / (maxHeight * 0.6 - _minHeight));
     return opacity.clamp(0.0, 1.0);
+  }
+
+  double _getIconOpacity() {
+    double fade = 1.0 - ((_navBarHeight - _minHeight) / 30);
+    return fade.clamp(0.0, 1.0);
   }
 
   @override
@@ -31,20 +34,11 @@ class _HomeScreenState extends State<HomeScreen> {
       floatingActionButton: Transform.translate(
         offset: const Offset(0, 27),
         child: Container(
-          height: 70,
-          width: 70,
+          height: 70, width: 70,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            gradient: const LinearGradient(
-              colors: [Color(0xFF00D9FF), Color(0xFF00D8FF)],
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.6),
-                blurRadius: 20,
-                spreadRadius: 2,
-              ),
-            ],
+            gradient: const LinearGradient(colors: [Color(0xFF00D9FF), Color(0xFF00D8FF)]),
+            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.6), blurRadius: 20, spreadRadius: 2)],
           ),
           child: IconButton(
             icon: const Icon(Icons.add, color: Colors.white, size: 32),
@@ -55,12 +49,11 @@ class _HomeScreenState extends State<HomeScreen> {
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       body: Stack(
         children: [
-          // 1. BACKGROUND CONTENT (HOME PANEL)
+          // 1. HOME PANEL CONTENT
           Positioned.fill(
             child: Opacity(
               opacity: _calculateOpacity(maxHeight),
               child: SingleChildScrollView(
-                // top: 170 provides the requested space between navbar and glossy box
                 padding: const EdgeInsets.only(top: 170, left: 16, right: 16, bottom: 150),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -93,11 +86,9 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
 
-          // 3. THE DRAGGABLE HEADER
+          // 3. DRAGGABLE HEADER
           Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
+            top: 0, left: 0, right: 0,
             height: _navBarHeight,
             child: GestureDetector(
               onVerticalDragUpdate: (details) {
@@ -117,52 +108,54 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Container(
                 decoration: BoxDecoration(
                   color: const Color(0xFF1A1B3A),
-                  borderRadius: BorderRadius.vertical(
-                    bottom: Radius.circular(_navBarHeight >= maxHeight ? 0 : 30),
-                  ),
+                  borderRadius: BorderRadius.vertical(bottom: Radius.circular(_navBarHeight >= maxHeight ? 0 : 30)),
                 ),
                 child: SafeArea(
                   bottom: false,
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      // Updated Header Row with Moon and Bot Icons
                       Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                        padding: const EdgeInsets.symmetric(horizontal: 12.0),
                         child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween, // Pushes icons to far edges
                           children: [
-                            IconButton(
-                              icon: Icon(
-                                _navBarHeight > 300 ? Icons.keyboard_arrow_up : Icons.menu,
-                                color: Colors.white,
-                                size: 26,
+                            // LEFT MENU ICON
+                            Opacity(
+                              opacity: _getIconOpacity(),
+                              child: IgnorePointer(
+                                ignoring: _navBarHeight > _minHeight + 10,
+                                child: IconButton(
+                                  icon: const Icon(Icons.menu, color: Colors.white, size: 26),
+                                  onPressed: () {},
+                                ),
                               ),
-                              onPressed: () => setState(() => _navBarHeight = _minHeight),
                             ),
-                            const Expanded(
-                              child: Center(
 
+                            // RIGHT ICONS
+                            Opacity(
+                              opacity: _getIconOpacity(),
+                              child: IgnorePointer(
+                                ignoring: _navBarHeight > _minHeight + 10,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(Icons.dark_mode_outlined, color: Colors.white, size: 22),
+                                      onPressed: () {},
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.smart_toy_outlined, color: Color(0xFF00D9FF), size: 22),
+                                      onPressed: () {},
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                            // NEW: Moon and Bot Icons side-by-side
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                IconButton(
-                                  icon: const Icon(Icons.dark_mode_outlined, color: Colors.white, size: 22),
-                                  onPressed: () {},
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.smart_toy_outlined, color: Color(0xFF00D9FF), size: 22),
-                                  onPressed: () {},
-                                ),
-                              ],
                             ),
                           ],
                         ),
                       ),
 
-                      // Expanded Menu Content
                       if (_navBarHeight > 250)
                         Expanded(
                           child: SingleChildScrollView(
@@ -170,6 +163,10 @@ class _HomeScreenState extends State<HomeScreen> {
                             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
                             child: Column(
                               children: [
+                                IconButton(
+                                  icon: const Icon(Icons.keyboard_arrow_up, color: Colors.white, size: 30),
+                                  onPressed: () => setState(() => _navBarHeight = _minHeight),
+                                ),
                                 const Text("Daily Statistics", style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
                                 const SizedBox(height: 20),
                                 _menuItem(Icons.auto_graph, "Weekly Progress", "Consistency is up 12%"),
@@ -182,16 +179,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       else
                         const Spacer(),
 
-                      // Cyan Drag Handle
                       if (_navBarHeight < maxHeight)
                         Container(
-                          height: 5,
-                          width: 65,
+                          height: 5, width: 65,
                           margin: const EdgeInsets.only(bottom: 12),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF00D9FF),
-                            borderRadius: BorderRadius.circular(50),
-                          ),
+                          decoration: BoxDecoration(color: const Color(0xFF00D9FF), borderRadius: BorderRadius.circular(50)),
                         ),
                     ],
                   ),
@@ -204,7 +196,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // --- UI HELPER COMPONENTS ---
+  // --- UI HELPERS ---
 
   Widget _menuItem(IconData icon, String title, String subtitle) {
     return ListTile(
@@ -221,21 +213,19 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildStatsBox() {
     return Container(
-      width: double.infinity,
-      height: 250,
+      width: double.infinity, height: 250,
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.08),
         borderRadius: BorderRadius.circular(30),
         border: Border.all(color: Colors.white.withOpacity(0.2)),
       ),
-      // Option 2: High horizontal padding (50) to reduce space between bars
       padding: const EdgeInsets.symmetric(horizontal: 50, vertical: 22),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           _buildVerticalStat("current\nStreak", "12", 0.6, Colors.orange),
           _buildVerticalStat("Today's\nProgress", "75%", 0.75, Colors.cyan),
-          _buildVerticalStat("Today's\nProgress", "75%", 0.75, Colors.cyan),
+          _buildVerticalStat("Focus\nTime", "2h", 0.75, Colors.cyan),
           _buildVerticalStat("Best\nStreak", "30", 0.9, Colors.purple),
         ],
       ),
@@ -243,10 +233,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildVerticalStat(String title, String value, double progress, Color color) {
-    // Increased width to 40 for a bolder appearance
     double barWidth = 40.0;
     double maxHeight = 110.0;
-
     return Column(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
@@ -255,20 +243,12 @@ class _HomeScreenState extends State<HomeScreen> {
         Stack(
           alignment: Alignment.bottomCenter,
           children: [
+            Container(height: maxHeight, width: barWidth, decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), borderRadius: BorderRadius.circular(12))),
             Container(
-              height: maxHeight,
-              width: barWidth,
-              decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
-            ),
-            Container(
-              height: maxHeight * progress,
-              width: barWidth,
+              height: maxHeight * progress, width: barWidth,
               decoration: BoxDecoration(
-                color: color,
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(color: color.withOpacity(0.3), blurRadius: 8, spreadRadius: 1),
-                ],
+                color: color, borderRadius: BorderRadius.circular(12),
+                boxShadow: [BoxShadow(color: color.withOpacity(0.3), blurRadius: 8, spreadRadius: 1)],
               ),
             ),
           ],
@@ -315,11 +295,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ],
                     ),
                   ),
-                  const CircleAvatar(
-                    radius: 14,
-                    backgroundColor: Color(0xFF00D9FF),
-                    child: Icon(Icons.check, color: Colors.white, size: 18),
-                  ),
+                  const CircleAvatar(radius: 14, backgroundColor: Color(0xFF00D9FF), child: Icon(Icons.check, color: Colors.white, size: 18)),
                 ],
               ),
             ),
