@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:ui';
+import 'dart:math' as math;
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -8,9 +9,28 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+// Added TickerProviderStateMixin for the wave animation
+class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   double _navBarHeight = 120.0;
   final double _minHeight = 120.0;
+
+  late AnimationController _waveController;
+
+  @override
+  void initState() {
+    super.initState();
+    // Animation controller that runs infinitely
+    _waveController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _waveController.dispose();
+    super.dispose();
+  }
 
   double _calculateOpacity(double maxHeight) {
     double opacity = 1.0 - ((_navBarHeight - _minHeight) / (maxHeight * 0.6 - _minHeight));
@@ -49,7 +69,6 @@ class _HomeScreenState extends State<HomeScreen> {
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       body: Stack(
         children: [
-          // 1. HOME PANEL CONTENT
           Positioned.fill(
             child: Opacity(
               opacity: _calculateOpacity(maxHeight),
@@ -74,7 +93,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
 
-          // 2. BLUR OVERLAY
           if (_navBarHeight > _minHeight)
             Positioned.fill(
               child: BackdropFilter(
@@ -86,7 +104,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
 
-          // 3. DRAGGABLE HEADER
           Positioned(
             top: 0, left: 0, right: 0,
             height: _navBarHeight,
@@ -118,9 +135,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 12.0),
                         child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween, // Pushes icons to far edges
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            // LEFT MENU ICON
                             Opacity(
                               opacity: _getIconOpacity(),
                               child: IgnorePointer(
@@ -131,8 +147,6 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                               ),
                             ),
-
-                            // RIGHT ICONS
                             Opacity(
                               opacity: _getIconOpacity(),
                               child: IgnorePointer(
@@ -196,20 +210,55 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // --- UI HELPERS ---
+  // --- PROGRESS BAR WITH WAVE ANIMATION ---
 
-  Widget _menuItem(IconData icon, String title, String subtitle) {
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(vertical: 10),
-      leading: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(color: const Color(0xFF00D9FF).withOpacity(0.1), borderRadius: BorderRadius.circular(15)),
-        child: Icon(icon, color: const Color(0xFF00D9FF)),
-      ),
-      title: Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-      subtitle: Text(subtitle, style: const TextStyle(color: Colors.white60)),
+  Widget _buildVerticalStat(String title, String value, double progress, Color color) {
+    double barWidth = 40.0;
+    double maxHeight = 110.0;
+
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(title, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 11)),
+        const SizedBox(height: 10),
+        Stack(
+          alignment: Alignment.bottomCenter,
+          children: [
+            // Background track
+            Container(
+              height: maxHeight,
+              width: barWidth,
+              decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12)
+              ),
+            ),
+            // Wave Animated Progress
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: AnimatedBuilder(
+                animation: _waveController,
+                builder: (context, child) {
+                  return CustomPaint(
+                    size: Size(barWidth, maxHeight),
+                    painter: WavePainter(
+                      color: color,
+                      progress: progress,
+                      waveValue: _waveController.value,
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Text(value, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 14)),
+      ],
     );
   }
+
+  // --- REST OF HELPERS ---
 
   Widget _buildStatsBox() {
     return Container(
@@ -232,30 +281,16 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildVerticalStat(String title, String value, double progress, Color color) {
-    double barWidth = 40.0;
-    double maxHeight = 110.0;
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(title, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 11)),
-        const SizedBox(height: 10),
-        Stack(
-          alignment: Alignment.bottomCenter,
-          children: [
-            Container(height: maxHeight, width: barWidth, decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), borderRadius: BorderRadius.circular(12))),
-            Container(
-              height: maxHeight * progress, width: barWidth,
-              decoration: BoxDecoration(
-                color: color, borderRadius: BorderRadius.circular(12),
-                boxShadow: [BoxShadow(color: color.withOpacity(0.3), blurRadius: 8, spreadRadius: 1)],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Text(value, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 14)),
-      ],
+  Widget _menuItem(IconData icon, String title, String subtitle) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(vertical: 10),
+      leading: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(color: const Color(0xFF00D9FF).withOpacity(0.1), borderRadius: BorderRadius.circular(15)),
+        child: Icon(icon, color: const Color(0xFF00D9FF)),
+      ),
+      title: Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+      subtitle: Text(subtitle, style: const TextStyle(color: Colors.white60)),
     );
   }
 
@@ -339,4 +374,62 @@ class _HomeScreenState extends State<HomeScreen> {
       ],
     );
   }
+}
+
+// --- WAVE PAINTER CLASS ---
+
+class WavePainter extends CustomPainter {
+  final Color color;
+  final double progress;
+  final double waveValue;
+
+  WavePainter({required this.color, required this.progress, required this.waveValue});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = color;
+    final path = Path();
+
+    // Calculate the height of the filled part
+    final fillHeight = size.height * progress;
+    final startY = size.height - fillHeight;
+
+    path.moveTo(0, size.height);
+    path.lineTo(0, startY);
+
+    // Draw the sine wave at the top of the progress bar
+    for (double i = 0; i <= size.width; i++) {
+      path.lineTo(
+        i,
+        startY + math.sin((i / size.width * 2 * math.pi) + (waveValue * 2 * math.pi)) * 4,
+      );
+    }
+
+    path.lineTo(size.width, size.height);
+    path.close();
+
+    canvas.drawPath(path, paint);
+
+    // Add a secondary lighter wave for depth
+    final paint2 = Paint()..color = color.withOpacity(0.3);
+    final path2 = Path();
+
+    path2.moveTo(0, size.height);
+    path2.lineTo(0, startY);
+
+    for (double i = 0; i <= size.width; i++) {
+      path2.lineTo(
+        i,
+        startY + math.cos((i / size.width * 2 * math.pi) + (waveValue * 2 * math.pi)) * 4,
+      );
+    }
+
+    path2.lineTo(size.width, size.height);
+    path2.close();
+
+    canvas.drawPath(path2, paint2);
+  }
+
+  @override
+  bool shouldRepaint(covariant WavePainter oldDelegate) => true;
 }
