@@ -1,252 +1,366 @@
 import 'package:flutter/material.dart';
 import 'dart:ui';
-class HomeScreen extends StatelessWidget{
+
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
   @override
-  Widget build(BuildContext context){
-    return Scaffold(
-        backgroundColor: const Color(0xFF0F1023),
-     appBar: PreferredSize(
-       preferredSize: const Size.fromHeight(100),
-       child: AppBar(
-         title: const Text("Home",
-           style: TextStyle(
-             fontSize: 22,
-             fontWeight: FontWeight.bold,
-           ),
-         ),
-         centerTitle: true,
-         backgroundColor: const Color(0xFF1A1B3A),
-         elevation: 0,
-         shape: const RoundedRectangleBorder(
-           borderRadius: BorderRadius.vertical(
-             bottom: Radius.circular(30),
-           ),
-         ),
-       ),
-     ),
+  State<HomeScreen> createState() => _HomeScreenState();
+}
 
-     body: Padding(
-       padding: const EdgeInsets.all(16),
-       child: Column(
-         crossAxisAlignment: CrossAxisAlignment.start,
-           children: [
-             //glossy box efxt
-             const  SizedBox(height: 22),
-             Container(
-               width: double.infinity,
-               height: 200,
-               decoration: BoxDecoration(
-                 color: Colors.white.withOpacity(0.08),
-                 borderRadius: const BorderRadius.only(
-                     topLeft: Radius.circular(30),
-                     topRight: Radius.circular(30),
-                     bottomLeft: Radius.circular(30),
-                     bottomRight: Radius.circular(30)
-                 ),
-                 border: Border.all(
-                   color: Colors.white.withOpacity(0.2),
-                 ),
-               ),
-               child: const Center(
-                 child: Text(
-                   "Welcome to Home Screen",
-                   style: TextStyle(
-                     fontSize: 22,
-                     fontWeight: FontWeight.bold,
-                     color: Colors.white,
-                   ),
-                 ),
-               ),
-             ),
-             const SizedBox(height: 22),
-             const Text(
-               "Today's Habit",
-               style: TextStyle(
-                 fontSize: 20,
-                 fontWeight: FontWeight.bold,
-                 color: Colors.white,
-               ),
-             ),
-             const SizedBox(height: 16),
-             _habitCard(),
-             _habitCard(),
-             _habitCard(),
-           ],
-       ),
+class _HomeScreenState extends State<HomeScreen> {
+  // Draggable logic variables
+  double _navBarHeight = 120.0;
+  final double _minHeight = 120.0;
 
-     )
-    );
+  // Calculates opacity for the home content (fades to 0 as we drag down)
+  double _calculateOpacity(double maxHeight) {
+    double opacity = 1.0 - ((_navBarHeight - _minHeight) / (maxHeight * 0.6 - _minHeight));
+    return opacity.clamp(0.0, 1.0);
   }
-  Widget _habitCard() {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 18),
 
-      child: Stack(
+  @override
+  Widget build(BuildContext context) {
+    final double screenHeight = MediaQuery.of(context).size.height;
+    final double maxHeight = screenHeight;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF0F1023),
+      extendBody: true,
+      bottomNavigationBar: _buildBottomNavBar(),
+      floatingActionButton: Transform.translate(
+        offset: const Offset(0, 27),
+        child: Container(
+          height: 70,
+          width: 70,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: const LinearGradient(
+              colors: [Color(0xFF00D9FF), Color(0xFF00D8FF)],
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.6),
+                blurRadius: 20,
+                spreadRadius: 2,
+              ),
+            ],
+          ),
+          child: IconButton(
+            icon: const Icon(Icons.add, color: Colors.white, size: 32),
+            onPressed: () {},
+          ),
+        ),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
+      body: Stack(
         children: [
-
-          /// BACK SHADOW CARD (this creates depth)
-          Positioned(
-            left: 4,
-            right: 0,
-            top: 4,
-
-            child: Container(
-              height: 80,
-
-              decoration: BoxDecoration(
-                color: const Color(0xFF15162B),
-
-                borderRadius:
-                BorderRadius.circular(22),
+          // 1. BACKGROUND CONTENT (HOME PANEL)
+          Positioned.fill(
+            child: Opacity(
+              opacity: _calculateOpacity(maxHeight),
+              child: SingleChildScrollView(
+                // top: 170 provides the requested space between navbar and glossy box
+                padding: const EdgeInsets.only(top: 170, left: 16, right: 16, bottom: 150),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildStatsBox(),
+                    const SizedBox(height: 25),
+                    const Text(
+                      "Today's Habit",
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                    const SizedBox(height: 16),
+                    _habitCard(),
+                    _habitCard(),
+                    _habitCard(),
+                  ],
+                ),
               ),
             ),
           ),
 
-          /// FRONT MAIN CARD
-          Container(
-            height: 80,
-
-            decoration: BoxDecoration(
-
-              gradient: const LinearGradient(
-                colors: [
-                  Color(0xFF2A2B4A),
-                  Color(0xFF1F203A),
-                ],
+          // 2. BLUR OVERLAY
+          if (_navBarHeight > _minHeight)
+            Positioned.fill(
+              child: BackdropFilter(
+                filter: ImageFilter.blur(
+                  sigmaX: (1.0 - _calculateOpacity(maxHeight)) * 15,
+                  sigmaY: (1.0 - _calculateOpacity(maxHeight)) * 15,
+                ),
+                child: Container(color: Colors.black.withOpacity(0.2 * (1.0 - _calculateOpacity(maxHeight)))),
               ),
-
-              borderRadius:
-              BorderRadius.circular(22),
             ),
 
-            child: Stack(
-              children: [
-
-                /// LEFT ACCENT LINE
-                Positioned(
-                  left: 0,
-                  top: 0,
-                  bottom: 0,
-
-                  child: Container(
-                    width: 4,
-
-                    decoration:
-                    const BoxDecoration(
-                      color: Color(0xFF00D9FF),
-
-                      borderRadius:
-                      BorderRadius.only(
-                        topLeft:
-                        Radius.circular(22),
-                        bottomLeft:
-                        Radius.circular(22),
-                      ),
-                    ),
+          // 3. THE DRAGGABLE HEADER
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: _navBarHeight,
+            child: GestureDetector(
+              onVerticalDragUpdate: (details) {
+                setState(() {
+                  _navBarHeight = (_navBarHeight + details.delta.dy).clamp(_minHeight, maxHeight);
+                });
+              },
+              onVerticalDragEnd: (details) {
+                setState(() {
+                  if (_navBarHeight > screenHeight * 0.25) {
+                    _navBarHeight = maxHeight;
+                  } else {
+                    _navBarHeight = _minHeight;
+                  }
+                });
+              },
+              child: Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1A1B3A),
+                  borderRadius: BorderRadius.vertical(
+                    bottom: Radius.circular(_navBarHeight >= maxHeight ? 0 : 30),
                   ),
                 ),
-
-                /// CONTENT
-                Padding(
-                  padding:
-                  const EdgeInsets.all(16),
-
-                  child: Row(
+                child: SafeArea(
+                  bottom: false,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-
-                      /// ICON BOX
-                      Container(
-                        padding:
-                        const EdgeInsets.all(10),
-
-                        decoration:
-                        BoxDecoration(
-                          color: const Color(
-                              0xFF00D9FF)
-                              .withOpacity(0.15),
-
-                          borderRadius:
-                          BorderRadius
-                              .circular(12),
-                        ),
-
-                        child: const Icon(
-                          Icons.menu_book,
-                          color:
-                          Color(0xFF00D9FF),
-                          size: 24,
-                        ),
-                      ),
-
-                      const SizedBox(width: 14),
-
-                      /// TEXT
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment:
-                          CrossAxisAlignment
-                              .start,
-
-                          mainAxisAlignment:
-                          MainAxisAlignment
-                              .center,
-
+                      // Updated Header Row with Moon and Bot Icons
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                        child: Row(
                           children: [
+                            IconButton(
+                              icon: Icon(
+                                _navBarHeight > 300 ? Icons.keyboard_arrow_up : Icons.menu,
+                                color: Colors.white,
+                                size: 26,
+                              ),
+                              onPressed: () => setState(() => _navBarHeight = _minHeight),
+                            ),
+                            const Expanded(
+                              child: Center(
 
-                            const Text(
-                              "Read 10 Pages",
-                              style: TextStyle(
-                                color:
-                                Colors.white,
-                                fontSize: 16,
-                                fontWeight:
-                                FontWeight.bold,
                               ),
                             ),
-
-                            const SizedBox(
-                                height: 4),
-
-                            const Text(
-                              "Streak: 12 days",
-                              style: TextStyle(
-                                color:
-                                Colors.white70,
-                                fontSize: 13,
-                              ),
+                            // NEW: Moon and Bot Icons side-by-side
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.dark_mode_outlined, color: Colors.white, size: 22),
+                                  onPressed: () {},
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.smart_toy_outlined, color: Color(0xFF00D9FF), size: 22),
+                                  onPressed: () {},
+                                ),
+                              ],
                             ),
                           ],
                         ),
                       ),
 
-                      /// CHECK BUTTON
-                      Container(
-                        padding:
-                        const EdgeInsets.all(8),
+                      // Expanded Menu Content
+                      if (_navBarHeight > 250)
+                        Expanded(
+                          child: SingleChildScrollView(
+                            physics: const BouncingScrollPhysics(),
+                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+                            child: Column(
+                              children: [
+                                const Text("Daily Statistics", style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+                                const SizedBox(height: 20),
+                                _menuItem(Icons.auto_graph, "Weekly Progress", "Consistency is up 12%"),
+                                _menuItem(Icons.history, "History", "Review your last 30 days"),
+                                _menuItem(Icons.emoji_events, "Achievements", "4 new badges unlocked"),
+                              ],
+                            ),
+                          ),
+                        )
+                      else
+                        const Spacer(),
 
-                        decoration:
-                        const BoxDecoration(
-                          color:
-                          Color(0xFF00D9FF),
-                          shape:
-                          BoxShape.circle,
+                      // Cyan Drag Handle
+                      if (_navBarHeight < maxHeight)
+                        Container(
+                          height: 5,
+                          width: 65,
+                          margin: const EdgeInsets.only(bottom: 12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF00D9FF),
+                            borderRadius: BorderRadius.circular(50),
+                          ),
                         ),
-
-                        child: const Icon(
-                          Icons.check,
-                          color: Colors.white,
-                          size: 18,
-                        ),
-                      ),
                     ],
                   ),
                 ),
-              ],
+              ),
             ),
           ),
         ],
       ),
+    );
+  }
+
+  // --- UI HELPER COMPONENTS ---
+
+  Widget _menuItem(IconData icon, String title, String subtitle) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(vertical: 10),
+      leading: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(color: const Color(0xFF00D9FF).withOpacity(0.1), borderRadius: BorderRadius.circular(15)),
+        child: Icon(icon, color: const Color(0xFF00D9FF)),
+      ),
+      title: Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+      subtitle: Text(subtitle, style: const TextStyle(color: Colors.white60)),
+    );
+  }
+
+  Widget _buildStatsBox() {
+    return Container(
+      width: double.infinity,
+      height: 250,
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(30),
+        border: Border.all(color: Colors.white.withOpacity(0.2)),
+      ),
+      // Option 2: High horizontal padding (50) to reduce space between bars
+      padding: const EdgeInsets.symmetric(horizontal: 50, vertical: 22),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          _buildVerticalStat("current\nStreak", "12", 0.6, Colors.orange),
+          _buildVerticalStat("Today's\nProgress", "75%", 0.75, Colors.cyan),
+          _buildVerticalStat("Today's\nProgress", "75%", 0.75, Colors.cyan),
+          _buildVerticalStat("Best\nStreak", "30", 0.9, Colors.purple),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVerticalStat(String title, String value, double progress, Color color) {
+    // Increased width to 40 for a bolder appearance
+    double barWidth = 40.0;
+    double maxHeight = 110.0;
+
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(title, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 11)),
+        const SizedBox(height: 10),
+        Stack(
+          alignment: Alignment.bottomCenter,
+          children: [
+            Container(
+              height: maxHeight,
+              width: barWidth,
+              decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
+            ),
+            Container(
+              height: maxHeight * progress,
+              width: barWidth,
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(color: color.withOpacity(0.3), blurRadius: 8, spreadRadius: 1),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Text(value, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 14)),
+      ],
+    );
+  }
+
+  Widget _habitCard() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Stack(
+        children: [
+          Positioned(
+            left: 4, right: 0, top: 4,
+            child: Container(height: 80, decoration: BoxDecoration(color: const Color(0xFF15162B), borderRadius: BorderRadius.circular(22))),
+          ),
+          Container(
+            height: 80,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(colors: [Color(0xFF2A2B4A), Color(0xFF1F203A)]),
+              borderRadius: BorderRadius.circular(22),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(color: const Color(0xFF00D9FF).withOpacity(0.15), borderRadius: BorderRadius.circular(12)),
+                    child: const Icon(Icons.menu_book, color: Color(0xFF00D9FF), size: 24),
+                  ),
+                  const SizedBox(width: 14),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text("Read 10 Pages", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                        SizedBox(height: 4),
+                        Text("Streak: 12 days", style: TextStyle(color: Colors.white70, fontSize: 13)),
+                      ],
+                    ),
+                  ),
+                  const CircleAvatar(
+                    radius: 14,
+                    backgroundColor: Color(0xFF00D9FF),
+                    child: Icon(Icons.check, color: Colors.white, size: 18),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBottomNavBar() {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Container(
+        height: 80,
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1B3A),
+          borderRadius: BorderRadius.circular(30),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.4), blurRadius: 20, offset: const Offset(0, 10))],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _navItem(Icons.home, "Home", true),
+            _navItem(Icons.pie_chart, "stats", false),
+            const SizedBox(width: 50),
+            _navItem(Icons.calendar_today, "Calendar", false),
+            _navItem(Icons.settings, "Settings", false),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _navItem(IconData icon, String label, bool isActive) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(icon, color: isActive ? const Color(0xFF00D9FF) : Colors.white),
+        const SizedBox(height: 4),
+        Text(label, style: TextStyle(color: isActive ? const Color(0xFF00D9FF) : Colors.white, fontSize: 12))
+      ],
     );
   }
 }
