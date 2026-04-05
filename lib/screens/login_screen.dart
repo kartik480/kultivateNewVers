@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:kultivate_new_ver/services/auth_service.dart';
+import 'package:kultivate_new_ver/services/habit_store.dart';
 import '../screens/home_screen.dart';
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -54,228 +55,231 @@ class _LoginScreenState extends State<LoginScreen> {
 
   //login page
   Widget _loginPage() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(height: 50),
-        // 🌱 Logo
-        Center(
-          child: Column(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(4),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(
-                    color: Colors.lightBlueAccent,
-                    width: 2,
-                  ),
-                ),
-                child: Image.asset(
-                  'images/logo.png',
-                  height: 100,
-                  width: 100,
-                ),
-              ),
+    return SingleChildScrollView(
+    child:  Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+    SizedBox(height: 50),
+    // 🌱 Logo
+    Center(
+    child: Column(
+    children: [
+    Container(
+    padding: const EdgeInsets.all(4),
+    decoration: BoxDecoration(
+    borderRadius: BorderRadius.circular(18),
+    border: Border.all(
+    color: Colors.lightBlueAccent,
+    width: 2,
+    ),
+    ),
+    child: Image.asset(
+    'images/logo.png',
+    height: 100,
+    width: 100,
+    ),
+    ),
 
-              SizedBox(height: 10),
-              Text(
-                "Kultivate",
-                style: TextStyle(
-                  fontSize: 30,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                ),
-              ),
-              Text(
-                "Build Better Habits",
-                style: TextStyle(
-                  color: Colors.white70,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 40),
-        const Text(
-          "Welcome Back",
-          style: TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
+    SizedBox(height: 10),
+    Text(
+    "Kultivate",
+    style: TextStyle(
+    fontSize: 30,
+    fontWeight: FontWeight.bold,
+    color: Colors.white,
+    ),
+    ),
+    Text(
+    "Build Better Habits",
+    style: TextStyle(
+    color: Colors.white70,
+    ),
+    ),
+    ],
+    ),
+    ),
+    const SizedBox(height: 40),
+    const Text(
+    "Welcome Back",
+    style: TextStyle(
+    fontSize: 24,
+    fontWeight: FontWeight.bold,
+    color: Colors.white,
 
-          ),
-        ),
-        const SizedBox(height: 6),
-        const Text(
-          "Sign in to continue your journey",
-          style: TextStyle(
-            color: Colors.white70,
-          ),
-        ),
-        const SizedBox(height: 25),
-        _buildTextField(
-          controller: emailController,
-          hint: "Email",
-          icon: Icons.email,
-          isPassword: false,
-        ),
-        const SizedBox(height: 15),
-        _buildTextField(
-          controller: passwordController,
-          hint: "Password",
-          icon: Icons.lock,
-          isPassword: true,
-        ),
-        const SizedBox(height: 15),
-        Row(
-          mainAxisAlignment:
-          MainAxisAlignment.spaceBetween,
-          children: [
-            Row(
-              children: [
-                Checkbox(
-                  value: false,
-                  onChanged: (value) {},
-                ),
-                const Text(
-                  "Remember my Habit!",
-                  style: TextStyle(color: Colors.white),
-                ),
-              ],
-            ),
-          ],
-        ),
-        TextButton(
-          onPressed: () {},
-          child: const Text(
-            "Forgot Your Habit??",
-            style: TextStyle(color: Colors.lightBlueAccent),
+    ),
+    ),
+    const SizedBox(height: 6),
+    const Text(
+    "Sign in to continue your journey",
+    style: TextStyle(
+    color: Colors.white70,
+    ),
+    ),
+    const SizedBox(height: 25),
+    _buildTextField(
+    controller: emailController,
+    hint: "Email",
+    icon: Icons.email,
+    isPassword: false,
+    ),
+    const SizedBox(height: 15),
+    _buildTextField(
+    controller: passwordController,
+    hint: "Password",
+    icon: Icons.lock,
+    isPassword: true,
+    ),
+    const SizedBox(height: 15),
+    Row(
+    mainAxisAlignment:
+    MainAxisAlignment.spaceBetween,
+    children: [
+    Row(
+    children: [
+    Checkbox(
+    value: false,
+    onChanged: (value) {},
+    ),
+    const Text(
+    "Remember my Habit!",
+    style: TextStyle(color: Colors.white),
+    ),
+    ],
+    ),
+    ],
+    ),
+    TextButton(
+    onPressed: () {},
+    child: const Text(
+    "Forgot Your Habit??",
+    style: TextStyle(color: Colors.lightBlueAccent),
 
-          ),
-        ),
-        const SizedBox(height: 10),
-        Container(
-          width: double.infinity,
-          height: 55,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [
-                Color(0xFF00D9FF),
-                Color(0xFF00D8FF),
-              ],
-            ),
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: ElevatedButton(
-            onPressed: () async {
-              bool success =
-                  await AuthService.loginUser(
-                    email: emailController.text,
-                    password: passwordController.text,
-                  );
-                  if (success){
-                    ScaffoldMessenger.of(context).showSnackBar(
-                     const SnackBar(
-                       content: Text("Login Successful"),
-                     ),
-                    );
-                    //going to home screen
-                    Navigator.pushReplacement(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const HomeScreen(),
-                      ),
-                    );
-                  }
-                  else{
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text("Login Failed"),
-                      ),
-                    );
-                  }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.transparent,
-              shadowColor: Colors.transparent,
-            ),
-            child: const Text(
-              "Login on-Habit on",
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 25),
-        Row(
-          children: const[
-            Expanded(
-              child: Divider(
-                color: Colors.white24,
-              ),
-            ),
-            Padding(
-              padding:
-              EdgeInsets.symmetric(horizontal: 10),
-              child: Text(
-                "or continue with",
-                style: TextStyle(color: Colors.white70),
-              ),
-            ),
-            Expanded(
-              child: Divider(
-                color: Colors.white24,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 20),
-        Row(
-          children: [
-            Expanded(
-              child: _socialButton(
-                icon: Icons.g_mobiledata,
-              ),
-            ),
-            const SizedBox(width: 15),
-            Expanded(
-              child: _socialButton(
-                icon: Icons.apple,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 25),
-        Center(
-            child: RichText(
-                text: TextSpan(
-                    text: "Don't have an account? ",
-                    style: const TextStyle(color: Colors.white),
-                    children: [
-                      TextSpan(
-                          text: "Sign Up",
-                          style: TextStyle(
-                            color: Colors.lightBlueAccent,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        recognizer: TapGestureRecognizer()
-                          ..onTap = (){
-                            _pageController.animateToPage(
-                              1,
-                              duration: const Duration(milliseconds: 400),
-                              curve: Curves.easeInOut,
-                            );
-                          }
-                      ),
-                    ]
-                )
-            )
-        )
-      ],
+    ),
+    ),
+    const SizedBox(height: 10),
+    Container(
+    width: double.infinity,
+    height: 55,
+    decoration: BoxDecoration(
+    gradient: const LinearGradient(
+    colors: [
+    Color(0xFF00D9FF),
+    Color(0xFF00D8FF),
+    ],
+    ),
+    borderRadius: BorderRadius.circular(14),
+    ),
+    child: ElevatedButton(
+    onPressed: () async {
+    final err = await AuthService.loginUser(
+    email: emailController.text,
+    password: passwordController.text,
+    );
+    if (err == null){
+    await HabitStore.instance.applyLogin(email: emailController.text.trim());
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(
+    content: Text("Login Successful"),
+    ),
+    );
+    Navigator.pushReplacement(
+    context,
+    MaterialPageRoute(
+    builder: (context) => const HomeScreen(),
+    ),
+    );
+    }
+    else{
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+    content: Text(err),
+    ),
+    );
+    }
+    },
+    style: ElevatedButton.styleFrom(
+    backgroundColor: Colors.transparent,
+    shadowColor: Colors.transparent,
+    ),
+    child: const Text(
+    "Login on-Habit on",
+    style: TextStyle(
+    fontSize: 16,
+    fontWeight: FontWeight.bold,
+    color: Colors.white,
+    ),
+    ),
+    ),
+    ),
+    const SizedBox(height: 25),
+    Row(
+    children: const[
+    Expanded(
+    child: Divider(
+    color: Colors.white24,
+    ),
+    ),
+    Padding(
+    padding:
+    EdgeInsets.symmetric(horizontal: 10),
+    child: Text(
+    "or continue with",
+    style: TextStyle(color: Colors.white70),
+    ),
+    ),
+    Expanded(
+    child: Divider(
+    color: Colors.white24,
+    ),
+    ),
+    ],
+    ),
+    const SizedBox(height: 20),
+    Row(
+    children: [
+    Expanded(
+    child: _socialButton(
+    icon: Icons.g_mobiledata,
+    ),
+    ),
+    const SizedBox(width: 15),
+    Expanded(
+    child: _socialButton(
+    icon: Icons.apple,
+    ),
+    ),
+    ],
+    ),
+    const SizedBox(height: 25),
+    Center(
+    child: RichText(
+    text: TextSpan(
+    text: "Don't have an account? ",
+    style: const TextStyle(color: Colors.white),
+    children: [
+    TextSpan(
+    text: "Sign Up",
+    style: TextStyle(
+    color: Colors.lightBlueAccent,
+    fontWeight: FontWeight.bold,
+    ),
+    recognizer: TapGestureRecognizer()
+    ..onTap = (){
+    _pageController.animateToPage(
+    1,
+    duration: const Duration(milliseconds: 400),
+    curve: Curves.easeInOut,
+    );
+    }
+    ),
+    ]
+    )
+    )
+    )
+    ],
+    )
     );
   }
 
@@ -320,31 +324,31 @@ class _LoginScreenState extends State<LoginScreen> {
               minimumSize: const Size(double.infinity , 55),
               backgroundColor: const Color(0xFF00D9FF),
             ),
-            onPressed: () async{
-              bool success =
-                  await AuthService.registerUser(
-                    name: nameController.text,
-                    email: signUpEmailController.text,
-                    password: signUpPasswordController.text,
-                  );
-              if (success){
+            onPressed: () async {
+              final err = await AuthService.registerUser(
+                name: nameController.text,
+                email: signUpEmailController.text,
+                password: signUpPasswordController.text,
+              );
+              if (!context.mounted) return;
+              if (err == null) {
+                await HabitStore.instance.registerProfile(
+                  displayName: nameController.text.trim(),
+                  email: signUpEmailController.text.trim(),
+                );
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
-                    content: Text("Register sucessfull"),
+                    content: Text("Register successful"),
                   ),
                 );
-                //going back to login
                 _pageController.animateToPage(
                   0,
                   duration: const Duration(milliseconds: 400),
                   curve: Curves.easeInOut,
                 );
-              }
-              else{
+              } else {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text("Register Failed"),
-                  ),
+                  SnackBar(content: Text(err)),
                 );
               }
             },
@@ -423,32 +427,6 @@ class _LoginScreenState extends State<LoginScreen> {
         color: Colors.white,
         size: 28,
       ),
-    );
-  }
-
-  Widget _buildButton(String text) {
-    return Container(
-        width: double.infinity,
-        height: 55,
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [
-              Color(0xFF00D9FF),
-              Color(0xFF00D8FF),
-            ],
-          ),
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Center(
-            child: Text(
-              text,
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-              ),
-            )
-        )
     );
   }
 }

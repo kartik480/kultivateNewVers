@@ -1,15 +1,19 @@
 import 'package:flutter/material.dart';
-import 'screens/login_screen.dart';
+import 'package:kultivate_new_ver/screens/login_screen.dart';
+import 'package:kultivate_new_ver/theme/kultivate_theme.dart';
 
-void main(){
-  runApp(app());
+void main() {
+  runApp(const KultivateApp());
 }
-class app extends StatelessWidget{
+
+class KultivateApp extends StatelessWidget {
+  const KultivateApp({super.key});
+
   @override
   Widget build(BuildContext context) {
-    // TODO: implement build
     return MaterialApp(
-      home: LoginScreen(),
+      theme: KultivateTheme.dark(),
+      home: const LoginScreen(),
     );
   }
 }
