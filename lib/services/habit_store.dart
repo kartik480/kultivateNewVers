@@ -44,10 +44,18 @@ class HabitStore extends ChangeNotifier {
       ..addAll(
         list.map((e) {
           final m = e as Map<String, dynamic>;
+          final rawNotes = m['notes'];
+          String? parsedNotes;
+          if (rawNotes != null) {
+            final s = rawNotes.toString().trim();
+            if (s.isNotEmpty) parsedNotes = s;
+          }
           return Habit(
             id: '${m['id']}',
             title: '${m['title']}',
             category: '${m['category'] ?? 'focus'}',
+            notes: parsedNotes,
+            frequency: _normalizeFrequency('${m['frequency'] ?? 'daily'}'),
           );
         }),
       );
@@ -83,6 +91,8 @@ class HabitStore extends ChangeNotifier {
                   'tempId': h.id,
                   'title': h.title,
                   'category': h.category,
+                  if (h.notes != null && h.notes!.trim().isNotEmpty) 'notes': h.notes!.trim(),
+                  'frequency': _normalizeFrequency(h.frequency),
                 })
             .toList();
         final compPayload = <String, dynamic>{};
@@ -222,7 +232,7 @@ class HabitStore extends ChangeNotifier {
 
   String insightNudgeBody() {
     if (habits.isEmpty) {
-      return 'Tap + to add your first habit. Completions here power stats, calendar, and your score.';
+      return 'Tap + for the activity wheel, or Custom to add a habit by hand (name, notes, repeat, category). Completions power stats, calendar, and your score.';
     }
     final left = habits.where((h) => !isCompletedOn(h.id, DateTime.now())).length;
     if (left == 0) {
@@ -308,6 +318,49 @@ class HabitStore extends ChangeNotifier {
     return (totalCompletions / 40).clamp(0.0, 1.0);
   }
 
+  static const int _companionCompletionsPerLevel = 40;
+  static const int _companionMaxLevel = 4;
+
+  /// Companion evolution level: 1 baby, 2 teen, 3 adult, 4 monster.
+  int get companionLevel {
+    final rawLevel = 1 + (totalCompletions ~/ _companionCompletionsPerLevel);
+    return rawLevel.clamp(1, _companionMaxLevel);
+  }
+
+  /// Progress inside the current companion level (0–1).
+  /// Once level 4 is reached, the bar stays full.
+  double get companionBondProgress {
+    if (companionLevel >= _companionMaxLevel) return 1.0;
+    final inLevel = totalCompletions % _companionCompletionsPerLevel;
+    return inLevel / _companionCompletionsPerLevel;
+  }
+
+  String get companionFormName {
+    switch (companionLevel) {
+      case 2:
+        return 'Teen Dragon';
+      case 3:
+        return 'Adult Dragon';
+      case 4:
+        return 'Monster Dragon';
+      default:
+        return 'Baby Dragon';
+    }
+  }
+
+  String get companionStageLabel {
+    switch (companionLevel) {
+      case 2:
+        return 'Adolescent';
+      case 3:
+        return 'Mature';
+      case 4:
+        return 'Titan';
+      default:
+        return 'Hatchling';
+    }
+  }
+
   double get todayProgressFraction {
     if (habits.isEmpty) return 0.0;
     final t = DateTime.now();
@@ -337,14 +390,28 @@ class HabitStore extends ChangeNotifier {
     return out;
   }
 
+  /// Category ids used for the stats split (unknown → [other]).
+  static const List<String> habitCategoryKeys = [
+    'focus',
+    'move',
+    'mind',
+    'learn',
+    'gym',
+    'nutrition',
+    'sleep',
+    'social',
+    'creative',
+    'other',
+  ];
+
   Map<String, double> categoryFractions() {
-    const keys = ['focus', 'move', 'mind', 'learn'];
+    const keys = habitCategoryKeys;
     if (habits.isEmpty) {
       return {for (final k in keys) k: 0.0};
     }
     final counts = <String, int>{for (final k in keys) k: 0};
     for (final h in habits) {
-      final c = keys.contains(h.category) ? h.category : 'focus';
+      final c = keys.contains(h.category) ? h.category : 'other';
       counts[c] = (counts[c] ?? 0) + 1;
     }
     final total = habits.length;
@@ -370,9 +437,18 @@ class HabitStore extends ChangeNotifier {
     return lines;
   }
 
-  Future<void> addHabit({required String title, required String category}) async {
+  Future<void> addHabit({
+    required String title,
+    required String category,
+    String? notes,
+    String frequency = 'daily',
+  }) async {
     final t = title.trim();
     if (t.isEmpty) return;
+
+    final n = notes?.trim();
+    final noteStr = n != null && n.isEmpty ? null : n;
+    final freq = _normalizeFrequency(frequency);
 
     final token = await AuthService.getToken();
     if (token != null && token.isNotEmpty) {
@@ -380,15 +456,28 @@ class HabitStore extends ChangeNotifier {
         final res = await http.post(
           _habitsUri(''),
           headers: _authHeaders(token),
-          body: jsonEncode({'title': t, 'category': category}),
+          body: jsonEncode({
+            'title': t,
+            'category': category,
+            'notes': noteStr ?? '',
+            'frequency': freq,
+          }),
         );
         if (res.statusCode == 201) {
           final map = jsonDecode(res.body) as Map<String, dynamic>;
           final hb = map['habit'] as Map<String, dynamic>;
+          final rawN = hb['notes'];
+          String? mergedNotes = noteStr;
+          if (rawN != null) {
+            final s = rawN.toString().trim();
+            mergedNotes = s.isEmpty ? null : s;
+          }
           final h = Habit(
             id: '${hb['id']}',
             title: '${hb['title']}',
             category: '${hb['category'] ?? 'focus'}',
+            notes: mergedNotes,
+            frequency: _normalizeFrequency('${hb['frequency'] ?? freq}'),
           );
           habits.add(h);
           _completionsByHabit[h.id] ??= {};
@@ -407,6 +496,8 @@ class HabitStore extends ChangeNotifier {
       id: '${DateTime.now().millisecondsSinceEpoch}',
       title: t,
       category: category,
+      notes: noteStr,
+      frequency: freq,
     );
     habits.add(h);
     _completionsByHabit[h.id] ??= {};
@@ -483,22 +574,51 @@ class HabitStore extends ChangeNotifier {
     await _persist();
     notifyListeners();
   }
+
+  /// Repeat field; persisted on server when logged in.
+  static String _normalizeFrequency(String f) {
+    switch (f) {
+      case 'weekdays':
+        return 'weekdays';
+      case 'weekly':
+        return 'weekly';
+      default:
+        return 'daily';
+    }
+  }
 }
 
 class Habit {
-  Habit({required this.id, required this.title, required this.category});
+  Habit({
+    required this.id,
+    required this.title,
+    required this.category,
+    this.notes,
+    this.frequency = 'daily',
+  });
 
   final String id;
   final String title;
   final String category;
+  final String? notes;
+  /// `daily` | `weekdays` | `weekly` — synced when using the habits API.
+  final String frequency;
 
-  Map<String, dynamic> toJson() => {'id': id, 'title': title, 'category': category};
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'category': category,
+        if (notes != null && notes!.isNotEmpty) 'notes': notes,
+        if (frequency != 'daily') 'frequency': frequency,
+      };
 
   factory Habit.fromJson(Map<String, dynamic> j) {
     return Habit(
       id: j['id'] as String,
       title: j['title'] as String,
       category: j['category'] as String? ?? 'focus',
+      notes: j['notes'] as String?,
+      frequency: j['frequency'] as String? ?? 'daily',
     );
   }
 }

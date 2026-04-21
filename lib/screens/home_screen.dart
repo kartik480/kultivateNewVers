@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'dart:ui';
 import 'dart:math' as math;
 import 'package:video_player/video_player.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import 'package:kultivate_new_ver/services/habit_store.dart';
 
@@ -17,6 +18,21 @@ String _categoryForRadialLabel(String label) {
       return 'move';
     case 'Reading':
       return 'learn';
+    case 'Gym':
+    case 'Strength':
+    case 'Strength training':
+      return 'gym';
+    case 'Hydration':
+    case 'Meal prep':
+      return 'nutrition';
+    case 'Sleep routine':
+    case 'Wind-down':
+      return 'sleep';
+    case 'Social time':
+    case 'Call a friend':
+      return 'social';
+    case 'Creative hour':
+      return 'creative';
     default:
       return 'focus';
   }
@@ -30,8 +46,42 @@ IconData _iconForHabitCategory(String cat) {
       return Icons.directions_run;
     case 'learn':
       return Icons.menu_book;
+    case 'gym':
+      return Icons.fitness_center;
+    case 'nutrition':
+      return Icons.restaurant_menu;
+    case 'sleep':
+      return Icons.bedtime_outlined;
+    case 'social':
+      return Icons.groups_outlined;
+    case 'creative':
+      return Icons.palette_outlined;
+    case 'other':
+      return Icons.category_outlined;
     default:
       return Icons.center_focus_strong;
+  }
+}
+
+Color _accentForHabitCategory(String cat) {
+  switch (cat) {
+    case 'learn':
+      return const Color(0xFF1ED7D5);
+    case 'gym':
+    case 'move':
+      return const Color(0xFFFF8A1E);
+    case 'mind':
+      return const Color(0xFFB05CFF);
+    case 'nutrition':
+      return const Color(0xFF63D471);
+    case 'sleep':
+      return const Color(0xFF7C8CFF);
+    case 'social':
+      return const Color(0xFFFF6FAE);
+    case 'creative':
+      return const Color(0xFFFFB347);
+    default:
+      return const Color(0xFF00D9FF);
   }
 }
 
@@ -50,7 +100,44 @@ const List<(String label, IconData icon)> _kActivityPresets = [
   ('Meditation', Icons.spa_outlined),
   ('Cycling', Icons.pedal_bike),
   ('Walking', Icons.directions_walk),
+  ('Gym', Icons.fitness_center),
+  ('Strength', Icons.sports_gymnastics),
+  ('Hydration', Icons.water_drop_outlined),
+  ('Meal prep', Icons.restaurant_menu),
+  ('Sleep routine', Icons.bedtime_outlined),
+  ('Wind-down', Icons.nightlight_round),
+  ('Social time', Icons.groups_outlined),
+  ('Call a friend', Icons.call_outlined),
+  ('Creative hour', Icons.palette_outlined),
 ];
+
+class _ManualReminder {
+  const _ManualReminder({
+    required this.habitId,
+    required this.habitTitle,
+    required this.time,
+    required this.createdAt,
+    this.note,
+  });
+
+  final String habitId;
+  final String habitTitle;
+  final TimeOfDay time;
+  final DateTime createdAt;
+  final String? note;
+}
+
+class _ReminderHistoryEntry {
+  const _ReminderHistoryEntry({
+    required this.title,
+    required this.detail,
+    required this.createdAt,
+  });
+
+  final String title;
+  final String detail;
+  final DateTime createdAt;
+}
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -61,12 +148,29 @@ class HomeScreen extends StatefulWidget {
 
 // Added TickerProviderStateMixin for the wave animation
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
+  static const String _defaultCompanionAsset = 'companions/babydragon.mp4';
   double _navBarHeight = 120.0;
   final double _minHeight = 120.0;
 
+  /// Filled when user picks a radial preset; consumed when the overlay [onClose] runs.
+  (String title, String category)? _pendingRadialHabitForm;
+
+  late final PageController _statsPageController;
+  int _statsPageIndex = 0;
+
   late AnimationController _waveController;
   late VideoPlayerController _babyDragonController;
+  /// Separate controller so the carousel lens can show the same clip without
+  /// attaching two [VideoPlayer]s to one controller (which breaks rendering).
+  late VideoPlayerController _companionLensController;
+  String _activeCompanionAsset = _defaultCompanionAsset;
+  bool _isSwitchingCompanionVideo = false;
   bool _wasCompanionsExpanded = false;
+  Habit? _selectedManualReminderHabit;
+  TimeOfDay _manualReminderTime = const TimeOfDay(hour: 7, minute: 0);
+  final TextEditingController _manualReminderNoteCtrl = TextEditingController();
+  final List<_ManualReminder> _manualReminders = [];
+  final List<_ReminderHistoryEntry> _reminderHistory = [];
 
   void _onBabyDragonVideoTick() {
     final c = _babyDragonController;
@@ -87,9 +191,98 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     }
   }
 
+  String _companionAssetForLevel(int level) {
+    switch (level) {
+      case 2:
+        return 'companions/teen_dragon_web.mp4';
+      case 3:
+        return 'companions/adult_dragon_web.mp4';
+      case 4:
+        return 'companions/monster_dragon_web.mp4';
+      default:
+        return _defaultCompanionAsset;
+    }
+  }
+
+  VideoPlayerController _buildCompanionController(String assetPath) {
+    return VideoPlayerController.asset(assetPath)
+      ..setLooping(true)
+      ..setVolume(0);
+  }
+
+  void _onHabitStoreChanged() {
+    _refreshCompanionVideoForLevel();
+  }
+
+  void _scheduleCompanionVideoResyncIfNeeded() {
+    if (_isSwitchingCompanionVideo || !mounted) return;
+    final targetAsset = _companionAssetForLevel(HabitStore.instance.companionLevel);
+    if (targetAsset == _activeCompanionAsset) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _refreshCompanionVideoForLevel();
+      }
+    });
+  }
+
+  Future<void> _refreshCompanionVideoForLevel() async {
+    if (_isSwitchingCompanionVideo) return;
+    final targetAsset = _companionAssetForLevel(HabitStore.instance.companionLevel);
+    if (targetAsset == _activeCompanionAsset) return;
+    _isSwitchingCompanionVideo = true;
+
+    final previousMain = _babyDragonController;
+    final previousLens = _companionLensController;
+
+    final nextMain = _buildCompanionController(targetAsset);
+    nextMain.addListener(_onBabyDragonVideoTick);
+
+    final nextLens = _buildCompanionController(targetAsset);
+
+    try {
+      await Future.wait([
+        nextMain.initialize().timeout(const Duration(seconds: 12)),
+        nextLens.initialize().timeout(const Duration(seconds: 12)),
+      ]);
+    } catch (e, st) {
+      debugPrint('companion video load: $e\n$st');
+      nextMain.removeListener(_onBabyDragonVideoTick);
+      await nextMain.dispose();
+      await nextLens.dispose();
+      _isSwitchingCompanionVideo = false;
+      return;
+    }
+
+    if (!mounted) {
+      nextMain.removeListener(_onBabyDragonVideoTick);
+      await nextMain.dispose();
+      await nextLens.dispose();
+      _isSwitchingCompanionVideo = false;
+      return;
+    }
+
+    setState(() {
+      _babyDragonController = nextMain;
+      _companionLensController = nextLens;
+      _activeCompanionAsset = targetAsset;
+    });
+
+    _babyDragonController.setLooping(true);
+    _babyDragonController.play();
+    if (_statsPageIndex == 2) {
+      _companionLensController.play();
+    }
+
+    previousMain.removeListener(_onBabyDragonVideoTick);
+    await previousMain.dispose();
+    await previousLens.dispose();
+    _isSwitchingCompanionVideo = false;
+  }
+
   @override
   void initState() {
     super.initState();
+    HabitStore.instance.addListener(_onHabitStoreChanged);
     HabitStore.instance.ensureLoaded();
     // Animation controller that runs infinitely
     _waveController = AnimationController(
@@ -97,9 +290,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       duration: const Duration(seconds: 2),
     )..repeat();
 
-    _babyDragonController = VideoPlayerController.asset('companions/babydragon.mp4')
-      ..setLooping(true)
-      ..setVolume(0);
+    _activeCompanionAsset = _companionAssetForLevel(HabitStore.instance.companionLevel);
+
+    _babyDragonController = _buildCompanionController(_activeCompanionAsset);
     _babyDragonController.addListener(_onBabyDragonVideoTick);
     _babyDragonController.initialize().then((_) {
       if (mounted) {
@@ -107,14 +300,36 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _babyDragonController.setLooping(true);
         _babyDragonController.play();
       }
+    }).catchError((e, st) {
+      debugPrint('companion main init: $e\n$st');
+    });
+
+    _companionLensController = _buildCompanionController(_activeCompanionAsset);
+    _companionLensController.initialize().then((_) {
+      if (!mounted) return;
+      setState(() {});
+      if (_statsPageIndex == 2) {
+        _companionLensController.play();
+      }
+    }).catchError((e, st) {
+      debugPrint('companion lens init: $e\n$st');
+    });
+
+    _statsPageController = PageController();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _refreshCompanionVideoForLevel();
     });
   }
 
   @override
   void dispose() {
+    HabitStore.instance.removeListener(_onHabitStoreChanged);
     _babyDragonController.removeListener(_onBabyDragonVideoTick);
     _waveController.dispose();
     _babyDragonController.dispose();
+    _companionLensController.dispose();
+    _statsPageController.dispose();
+    _manualReminderNoteCtrl.dispose();
     super.dispose();
   }
 
@@ -168,7 +383,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return (Offset(left, top), fabSize);
   }
 
-  void _showHabitCreatePanel() {
+  void _showHabitCreatePanel({
+    String? initialTitle,
+    String? initialCategory,
+  }) {
+    final fromPreset = initialTitle != null &&
+        initialTitle.isNotEmpty &&
+        initialCategory != null &&
+        initialCategory.isNotEmpty;
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -178,13 +400,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         return Padding(
           padding: EdgeInsets.only(bottom: bottomInset),
           child: DraggableScrollableSheet(
-            initialChildSize: 0.58,
+            initialChildSize: fromPreset ? 0.74 : 0.66,
             minChildSize: 0.36,
             maxChildSize: 0.92,
             expand: false,
             builder: (context, scrollController) {
               return _HabitCreateSheet(
                 scrollController: scrollController,
+                initialTitle: initialTitle,
+                initialCategory: initialCategory,
                 onOpenActivityWheel: () {
                   Navigator.of(sheetContext).pop();
                   WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -233,8 +457,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   void _openActivityRadialMenu() {
+    _pendingRadialHabitForm = null;
     final (topLeft, fabSize) = _fabTopLeftAndSize();
-    final homeCtx = context;
 
     showGeneralDialog<void>(
       context: context,
@@ -247,40 +471,26 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         return RadialActivityPickerOverlay(
           fabTopLeft: topLeft,
           fabSize: fabSize,
-          onClose: () => Navigator.of(dialogContext).pop(),
-          onPickActivity: (title, category) => HabitStore.instance.addHabit(title: title, category: category),
-          onAfterCustomHabit: () async {
-            await Future<void>.delayed(const Duration(milliseconds: 80));
-            if (!homeCtx.mounted) return;
-            final name = await showDialog<String>(
-              context: homeCtx,
-              builder: (ctx) {
-                final c = TextEditingController();
-                return AlertDialog(
-                  backgroundColor: const Color(0xFF1A1B3A),
-                  title: const Text('Custom habit', style: TextStyle(color: Colors.white)),
-                  content: TextField(
-                    controller: c,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: const InputDecoration(
-                      hintText: 'What will you track?',
-                      hintStyle: TextStyle(color: Colors.white54),
-                    ),
-                    onSubmitted: (v) => Navigator.pop(ctx, v),
-                  ),
-                  actions: [
-                    TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-                    TextButton(
-                      onPressed: () => Navigator.pop(ctx, c.text.trim()),
-                      child: const Text('Add'),
-                    ),
-                  ],
+          onClose: () {
+            final payload = _pendingRadialHabitForm;
+            _pendingRadialHabitForm = null;
+            Navigator.of(dialogContext).pop();
+            if (payload != null && mounted) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) return;
+                _showHabitCreatePanel(
+                  initialTitle: payload.$1,
+                  initialCategory: payload.$2,
                 );
-              },
-            );
-            if (name != null && name.trim().isNotEmpty) {
-              await HabitStore.instance.addHabit(title: name.trim(), category: 'focus');
+              });
             }
+          },
+          onPresetChosen: (title, category) {
+            _pendingRadialHabitForm = (title, category);
+          },
+          onAfterCustomHabit: () async {
+            if (!mounted) return;
+            _showHabitCreatePanel();
           },
         );
       },
@@ -326,7 +536,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ),
           child: IconButton(
             icon: const Icon(Icons.add, color: Colors.white, size: 32),
-            onPressed: _showHabitCreatePanel,
+            onPressed: _openActivityRadialMenu,
           ),
         ),
       ),
@@ -357,30 +567,84 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         ),
                         const SizedBox(width: 12),
                         Expanded(
-                          child: Text(
-                            '${_greetingForNow()}, ${HabitStore.instance.displayName}!',
-                            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w700,
-                                ) ??
-                                const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 22,
-                                  fontWeight: FontWeight.w700,
+                          child: Text.rich(
+                            TextSpan(
+                              children: [
+                                TextSpan(
+                                  text: _greetingForNow(),
+                                  style: GoogleFonts.clickerScript(
+                                    fontSize: 20,
+                                    color: Colors.white,
+                                    height: 1.05,
+                                  ),
                                 ),
+                                TextSpan(
+                                  text: ', ',
+                                  style: GoogleFonts.clickerScript(
+                                    fontSize: 20,
+                                    color: Colors.white,
+                                    height: 1.05,
+                                  ),
+                                ),
+                                TextSpan(
+                                  text: HabitStore.instance.displayName,
+                                  style: GoogleFonts.clickerScript(
+                                    fontSize: 24,
+                                    color: Colors.white,
+                                    height: 1.05,
+                                  ),
+                                ),
+                                TextSpan(
+                                  text: '!',
+                                  style: GoogleFonts.clickerScript(
+                                    fontSize: 20,
+                                    color: Colors.white,
+                                    height: 1.05,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       ],
                     ),
                     const SizedBox(height: 20),
-                    _buildStatsBox(),
+                    _buildStatsCarousel(),
                     const SizedBox(height: 25),
-                    const Text(
-                      "Today's Habit",
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 280),
+                      switchInCurve: Curves.easeOutCubic,
+                      switchOutCurve: Curves.easeInCubic,
+                      transitionBuilder: _buildStatsSwapTransition,
+                      child: Column(
+                        key: ValueKey<int>(_statsPageIndex),
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _statsPanelSectionTitle(),
+                            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            _statsPanelSectionSubtitle(),
+                            style: TextStyle(fontSize: 13, height: 1.35, color: Colors.white.withOpacity(0.58)),
+                          ),
+                          const SizedBox(height: 14),
+                        ],
+                      ),
                     ),
-                    const SizedBox(height: 16),
-                    ..._buildHabitSection(context),
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 320),
+                      switchInCurve: Curves.easeOutCubic,
+                      switchOutCurve: Curves.easeInCubic,
+                      transitionBuilder: _buildStatsSwapTransition,
+                      child: Column(
+                        key: ValueKey<String>('stats-content-$_statsPageIndex'),
+                        children: _buildHabitSectionForStatsPage(context, _statsPageIndex),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -419,39 +683,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             _navBarHeight < maxHeight ? _onPanelVerticalDragEnd : null,
                         child: Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 12.0),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Opacity(
-                                opacity: _getIconOpacity(),
-                                child: IgnorePointer(
-                                  ignoring: _navBarHeight > _minHeight + 10,
-                                  child: IconButton(
-                                    icon: const Icon(Icons.menu, color: Colors.white, size: 26),
-                                    onPressed: () {},
-                                  ),
-                                ),
-                              ),
-                              Opacity(
-                                opacity: _getIconOpacity(),
-                                child: IgnorePointer(
-                                  ignoring: _navBarHeight > _minHeight + 10,
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      IconButton(
-                                        icon: const Icon(Icons.dark_mode_outlined, color: Colors.white, size: 22),
-                                        onPressed: () {},
-                                      ),
-                                      IconButton(
-                                        icon: const Icon(Icons.smart_toy_outlined, color: Color(0xFF00D9FF), size: 22),
-                                        onPressed: _showHabitTeacherBotPanel,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ],
+                          child: SizedBox(
+                            height: 12,
+                            width: double.infinity,
                           ),
                         ),
                       ),
@@ -490,7 +724,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                     ClipRRect(
                                       borderRadius:  BorderRadius.circular(10),
                                       child: LinearProgressIndicator(
-                                        value: HabitStore.instance.bondProgress,
+                                        value: HabitStore.instance.companionBondProgress,
                                         minHeight: 12,
                                         backgroundColor: Colors.white10,
                                         color: const Color(0xFF00D9FF),
@@ -524,6 +758,33 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           ),
                         ),
 
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Opacity(
+                              opacity: _getIconOpacity(),
+                              child: IgnorePointer(
+                                ignoring: _navBarHeight > _minHeight + 10,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(Icons.dark_mode_outlined, color: Colors.white, size: 22),
+                                      onPressed: () {},
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.smart_toy_outlined, color: Color(0xFF00D9FF), size: 22),
+                                      onPressed: _showHabitTeacherBotPanel,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                       if (_navBarHeight < maxHeight)
                         GestureDetector(
                           behavior: HitTestBehavior.translucent,
@@ -531,8 +792,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           onVerticalDragEnd: _onPanelVerticalDragEnd,
                           onTap: () {
                             setState(() {
-                              _navBarHeight =
-                                  _navBarHeight > screenHeight * 0.25 ? _minHeight : maxHeight;
+                              _navBarHeight = _navBarHeight > screenHeight * 0.25 ? _minHeight : maxHeight;
                             });
                           },
                           child: SizedBox(
@@ -566,56 +826,86 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   // --- PROGRESS BAR WITH WAVE ANIMATION ---
 
-  Widget _buildVerticalStat(String title, String value, double progress, Color color, {String unit = ''}) {
-    double barWidth = 40.0;
-    double maxHeight = 110.0;
+  Widget _buildStatsSwapTransition(Widget child, Animation<double> animation) {
+    final curved = CurvedAnimation(
+      parent: animation,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+    final fade = Tween<double>(begin: 0.0, end: 1.0).animate(curved);
+    return FadeTransition(opacity: fade, child: child);
+  }
 
+  Widget _buildVerticalStat(
+    String title,
+    String value,
+    double progress,
+    Color color, {
+    String unit = '',
+    double barWidth = 50,
+    double maxHeight = 92,
+    double titleFontSize = 11,
+    double valueFontSize = 14,
+    double unitFontSize = 11,
+  }) {
+    final targetProgress = progress.clamp(0.0, 1.0);
     return Column(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Text(title, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 11)),
-        const SizedBox(height: 10),
-        Stack(
-          alignment: Alignment.bottomCenter,
-          children: [
-            // Background track
-            Container(
-              height: maxHeight,
-              width: barWidth,
-              decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12)
-              ),
-            ),
-            // Wave Animated Progress
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: AnimatedBuilder(
-                animation: _waveController,
-                builder: (context, child) {
-                  return CustomPaint(
-                    size: Size(barWidth, maxHeight),
-                    painter: WavePainter(
-                      color: color,
-                      progress: progress,
-                      waveValue: _waveController.value,
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
+        Text(
+          title,
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Colors.white70, fontSize: titleFontSize, height: 1.2),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 8),
+        TweenAnimationBuilder<double>(
+          duration: const Duration(milliseconds: 520),
+          curve: Curves.easeOutCubic,
+          tween: Tween<double>(begin: targetProgress, end: targetProgress),
+          builder: (context, animatedProgress, _) {
+            return Stack(
+              alignment: Alignment.bottomCenter,
+              children: [
+                // Background track
+                Container(
+                  height: maxHeight,
+                  width: barWidth,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                // Wave Animated Progress
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: AnimatedBuilder(
+                    animation: _waveController,
+                    builder: (context, child) {
+                      return CustomPaint(
+                        size: Size(barWidth, maxHeight),
+                        painter: WavePainter(
+                          color: color,
+                          progress: animatedProgress,
+                          waveValue: _waveController.value,
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 8),
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           crossAxisAlignment: CrossAxisAlignment.baseline,
           textBaseline: TextBaseline.alphabetic,
           children: [
-            Text(value, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 14)),
+            Text(value, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: valueFontSize)),
             if (unit.isNotEmpty) ...[
               const SizedBox(width: 2),
-              Text(unit, style: TextStyle(color: color.withOpacity(0.85), fontWeight: FontWeight.w600, fontSize: 11)),
+              Text(unit, style: TextStyle(color: color.withOpacity(0.85), fontWeight: FontWeight.w600, fontSize: unitFontSize)),
             ],
           ],
         ),
@@ -625,7 +915,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   // --- REST OF HELPERS ---
 
-  Widget _buildStatsBox() {
+  static const int _statsPageCount = 3;
+
+  /// Carousel lenses: streak momentum, reminders, and My companion.
+  Widget _buildStatsCarousel() {
     final s = HabitStore.instance;
     final tp = s.todayProgressFraction;
     final fm = s.estimatedFocusMinutesToday;
@@ -633,24 +926,946 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final focusUnit = fm >= 60 ? 'h' : 'm';
     final curProg = s.habits.isEmpty ? 0.0 : (s.currentStreak / 30.0).clamp(0.0, 1.0);
     final bestProg = s.bestStreakRecorded == 0 ? 0.0 : (s.bestStreakRecorded / 60.0).clamp(0.0, 1.0);
+    const cyan = Color(0xFF00D9FF);
+
     return Container(
-      width: double.infinity, height: 250,
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.08),
         borderRadius: BorderRadius.circular(30),
         border: Border.all(color: Colors.white.withOpacity(0.2)),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 50, vertical: 22),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _buildVerticalStat("current\nStreak", '${s.currentStreak}', curProg, Colors.orange),
-          _buildVerticalStat("Today's\nProgress", '${(tp * 100).round()}%', tp.clamp(0.0, 1.0), Colors.orange),
-          _buildVerticalStat("Focus\nTime", focusVal, (fm / 120.0).clamp(0.0, 1.0), Colors.orange, unit: focusUnit),
-          _buildVerticalStat("Best\nStreak", '${s.bestStreakRecorded}', bestProg, Colors.orange),
+          SizedBox(
+            height: 188,
+            child: PageView.builder(
+              controller: _statsPageController,
+              itemCount: _statsPageCount,
+              physics: const BouncingScrollPhysics(parent: PageScrollPhysics()),
+              padEnds: false,
+              onPageChanged: (i) {
+                setState(() => _statsPageIndex = i);
+                _syncCompanionLensPlayback(i);
+              },
+              itemBuilder: (context, i) {
+                if (i == 1) {
+                  return _buildReminderLensClockSummary();
+                }
+                if (i == 2) {
+                  return _buildCompanionLensSummary();
+                }
+                return Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      _buildVerticalStat("current\nStreak", '${s.currentStreak}', curProg, Colors.orange),
+                      _buildVerticalStat("Today's\nProgress", '${(tp * 100).round()}%', tp.clamp(0.0, 1.0), Colors.orange),
+                      _buildVerticalStat("Focus\nTime", focusVal, (fm / 120.0).clamp(0.0, 1.0), Colors.orange, unit: focusUnit),
+                      _buildVerticalStat("Best\nStreak", '${s.bestStreakRecorded}', bestProg, Colors.orange),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              'Swipe · ${_statsSwipeLensLabel(_statsPageIndex)}',
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.42),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.3,
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(_statsPageCount, (i) {
+                final on = i == _statsPageIndex;
+                return GestureDetector(
+                  onTap: () {
+                    _statsPageController.animateToPage(
+                      i,
+                      duration: const Duration(milliseconds: 320),
+                      curve: Curves.easeOutCubic,
+                    );
+                  },
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 220),
+                    margin: const EdgeInsets.symmetric(horizontal: 4),
+                    width: on ? 22 : 7,
+                    height: 7,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(99),
+                      color: on ? cyan : Colors.white.withOpacity(0.22),
+                    ),
+                  ),
+                );
+              }),
+            ),
+          ),
         ],
       ),
     );
+  }
+
+  Widget _buildReminderLensClockSummary() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 12, 18, 6),
+      child: AnimatedBuilder(
+        animation: _waveController,
+        builder: (context, _) {
+          final now = DateTime.now();
+          return Column(
+            children: [
+              _buildAnalogReminderClock(now, size: 108),
+              const SizedBox(height: 6),
+              Text(
+                _formatReminderClock(now),
+                style: const TextStyle(
+                  color: Color(0xFF00D9FF),
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.8,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Reminder clock',
+                style: TextStyle(color: Colors.white.withOpacity(0.62), fontSize: 12, fontWeight: FontWeight.w600),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _syncCompanionLensPlayback(int pageIndex) {
+    final c = _companionLensController;
+    if (!c.value.isInitialized) return;
+    if (pageIndex == 2) {
+      c.play();
+    } else {
+      c.pause();
+    }
+  }
+
+  Widget _unsupportedVideoFallback({required bool compact}) {
+    return Center(
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 14),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.video_file_outlined,
+              color: const Color(0xFF00D9FF).withOpacity(0.9),
+              size: compact ? 20 : 30,
+            ),
+            SizedBox(height: compact ? 6 : 8),
+            Text(
+              'Video format not supported by browser',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.78),
+                fontSize: compact ? 9.5 : 11.5,
+                fontWeight: FontWeight.w600,
+                height: 1.25,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Uses [_companionLensController] so the main companion [VideoPlayer] is unchanged.
+  Widget _buildCompanionLensSummary() {
+    _scheduleCompanionVideoResyncIfNeeded();
+    const cyan = Color(0xFF00D9FF);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+      child: ListenableBuilder(
+        listenable: HabitStore.instance,
+        builder: (context, _) {
+          final store = HabitStore.instance;
+          final bond = (store.companionBondProgress * 100).round();
+          return Center(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                SizedBox(
+                  width: 100,
+                  height: 100,
+                  child: Container(
+                    padding: const EdgeInsets.all(5),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(18),
+                      gradient: const LinearGradient(
+                        colors: [cyan, Color(0xFF6A5CFF)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(14),
+                      child: ColoredBox(
+                        color: const Color(0xFF10142B),
+                        child: AnimatedBuilder(
+                          animation: _companionLensController,
+                          builder: (context, _) {
+                            if (_companionLensController.value.hasError) {
+                              return _unsupportedVideoFallback(compact: true);
+                            }
+                            final ready = _companionLensController.value.isInitialized;
+                            if (!ready) {
+                              return const Center(
+                                child: SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: cyan),
+                                ),
+                              );
+                            }
+                            return FittedBox(
+                              fit: BoxFit.cover,
+                              alignment: Alignment.center,
+                              child: SizedBox(
+                                width: _companionLensController.value.size.width,
+                                height: _companionLensController.value.size.height,
+                                child: VideoPlayer(_companionLensController),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      store.companionFormName,
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.92),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '$bond% bond',
+                      style: const TextStyle(color: cyan, fontSize: 13, fontWeight: FontWeight.w700),
+                    ),
+                    Text(
+                      'Grows with check-ins',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.55),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  String _statsSwipeLensLabel(int i) {
+    switch (i) {
+      case 0:
+        return 'streak momentum';
+      case 1:
+        return 'reminders';
+      case 2:
+        return 'my companion';
+      default:
+        return 'streak momentum';
+    }
+  }
+
+  String _statsPanelSectionTitle() {
+    switch (_statsPageIndex) {
+      case 0:
+        return 'Streak momentum';
+      case 1:
+        return 'Reminders';
+      case 2:
+        return 'My companion';
+      default:
+        return 'Streak momentum';
+    }
+  }
+
+  String _statsPanelSectionSubtitle() {
+    switch (_statsPageIndex) {
+      case 0:
+        return 'Tap a card to log today and grow the chain.';
+      case 1:
+        return 'Quick nudges for habits still pending today — tap to check in from here.';
+      case 2:
+        return 'Meet your companion, track bond, and open status for skins and progress.';
+      default:
+        return '';
+    }
+  }
+
+  List<Widget> _buildHabitSectionForStatsPage(BuildContext context, int page) {
+    final store = HabitStore.instance;
+    if (store.habits.isEmpty) {
+      return _buildHabitSection(context);
+    }
+    switch (page) {
+      case 0:
+        break;
+      case 1:
+        return _buildReminderSection(context);
+      case 2:
+        return _buildCompanionHomeSection(context);
+    }
+    return [_habitGrid(context, store.habits)];
+  }
+
+  List<Widget> _buildReminderSection(BuildContext context) {
+    final store = HabitStore.instance;
+    final now = DateTime.now();
+    final pending = store.habits
+        .where((h) => !store.isCompletedOn(h.id, now))
+        .toList()
+      ..sort((a, b) => store.habitStreak(a.id).compareTo(store.habitStreak(b.id)));
+
+    final selectedHabitStillPending = pending.any((h) => h.id == _selectedManualReminderHabit?.id);
+    if (!selectedHabitStillPending) {
+      _selectedManualReminderHabit = pending.isNotEmpty ? pending.first : null;
+    }
+
+    return [
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.06),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.white.withOpacity(0.1)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.alarm_add_rounded, color: Color(0xFF00D9FF), size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Manual reminder setup',
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.92),
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                Text(
+                  _formatReminderClock(now),
+                  style: const TextStyle(
+                    color: Color(0xFF00D9FF),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Choose a pending habit, set a time, then save the reminder.',
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.62),
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              value: _selectedManualReminderHabit?.id,
+              dropdownColor: const Color(0xFF18243D),
+              decoration: InputDecoration(
+                labelText: 'Habit',
+                labelStyle: TextStyle(color: Colors.white.withOpacity(0.74)),
+                filled: true,
+                fillColor: Colors.white.withOpacity(0.05),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: Colors.white.withOpacity(0.14)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: Colors.white.withOpacity(0.14)),
+                ),
+                focusedBorder: const OutlineInputBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(12)),
+                  borderSide: BorderSide(color: Color(0xFF00D9FF), width: 1.1),
+                ),
+              ),
+              iconEnabledColor: Colors.white.withOpacity(0.72),
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+              items: [
+                for (final h in pending)
+                  DropdownMenuItem<String>(
+                    value: h.id,
+                    child: Text(
+                      h.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+              ],
+              onChanged: pending.isEmpty
+                  ? null
+                  : (id) {
+                      if (id == null) return;
+                      Habit? match;
+                      for (final h in pending) {
+                        if (h.id == id) {
+                          match = h;
+                          break;
+                        }
+                      }
+                      if (match != null) {
+                        setState(() => _selectedManualReminderHabit = match);
+                      }
+                    },
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      final picked = await showTimePicker(
+                        context: context,
+                        initialTime: _manualReminderTime,
+                        helpText: 'Pick reminder time',
+                        builder: (ctx, child) {
+                          return Theme(
+                            data: Theme.of(ctx).copyWith(
+                              colorScheme: Theme.of(ctx).colorScheme.copyWith(
+                                    primary: const Color(0xFF00D9FF),
+                                  ),
+                            ),
+                            child: child ?? const SizedBox.shrink(),
+                          );
+                        },
+                      );
+                      if (picked != null && mounted) {
+                        setState(() => _manualReminderTime = picked);
+                      }
+                    },
+                    icon: const Icon(Icons.schedule_rounded, size: 18),
+                    label: Text(_formatTimeOfDay(_manualReminderTime)),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white.withOpacity(0.9),
+                      side: BorderSide(color: Colors.white.withOpacity(0.2)),
+                      backgroundColor: Colors.white.withOpacity(0.04),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: pending.isEmpty
+                        ? null
+                        : () => _saveManualReminder(
+                              context,
+                              selected: _selectedManualReminderHabit,
+                            ),
+                    icon: const Icon(Icons.notifications_active_outlined, size: 18),
+                    label: const Text('Set reminder'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF00D9FF).withOpacity(0.24),
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: Colors.white.withOpacity(0.08),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side: BorderSide(color: const Color(0xFF00D9FF).withOpacity(0.42)),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _manualReminderNoteCtrl,
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+              maxLines: 2,
+              decoration: InputDecoration(
+                hintText: 'Note (optional): e.g. quick walk after tea',
+                hintStyle: TextStyle(color: Colors.white.withOpacity(0.44)),
+                filled: true,
+                fillColor: Colors.white.withOpacity(0.04),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: Colors.white.withOpacity(0.14)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: Colors.white.withOpacity(0.14)),
+                ),
+                focusedBorder: const OutlineInputBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(12)),
+                  borderSide: BorderSide(color: Color(0xFF00D9FF), width: 1.1),
+                ),
+              ),
+            ),
+            if (_manualReminders.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(
+                'Upcoming manual reminders',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.78),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 8),
+              for (final reminder in _manualReminders.take(3))
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.alarm, color: Color(0xFF00D9FF), size: 16),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${_formatTimeOfDay(reminder.time)} · ${reminder.habitTitle}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            Text(
+                              reminder.note?.isNotEmpty == true
+                                  ? reminder.note!
+                                  : 'Added ${_formatHistoryStamp(reminder.createdAt)}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(0.56),
+                                fontSize: 10.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ],
+        ),
+      ),
+      const SizedBox(height: 14),
+      _reminderHistoryCard(),
+    ];
+  }
+
+  List<Widget> _buildCompanionHomeSection(BuildContext context) {
+    return [
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.06),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.white.withOpacity(0.1)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.pets_rounded, color: Color(0xFF00D9FF), size: 22),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'My companion',
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.92),
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Your companion gets closer as you keep habits — raise bond with steady check-ins.',
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.62),
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 16),
+      Center(
+        child: _buildCompanionVideoFrame(
+          showLiveVideo: _navBarHeight <= 250,
+        ),
+      ),
+      const SizedBox(height: 16),
+      ListenableBuilder(
+        listenable: HabitStore.instance,
+        builder: (context, _) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Bond level', style: TextStyle(color: Colors.white70, fontSize: 14)),
+            const SizedBox(height: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: LinearProgressIndicator(
+                value: HabitStore.instance.companionBondProgress,
+                minHeight: 12,
+                backgroundColor: Colors.white10,
+                color: const Color(0xFF00D9FF),
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 20),
+      _buildCompanionStrengthPanel(),
+    ];
+  }
+
+  Widget _buildCompanionStrengthPanel() {
+    final s = HabitStore.instance;
+    final bondPct = (s.companionBondProgress * 100).round();
+    final streakPower = ((s.currentStreak / 30) * 100).clamp(0.0, 100.0).round();
+    final syncScore = ((s.totalCompletions / 500) * 100).clamp(0.0, 100.0).round();
+    final strengthScore =
+        ((bondPct * 0.6) + (streakPower * 0.25) + (syncScore * 0.15)).round();
+    final tier = strengthScore >= 80
+        ? 'Elite'
+        : strengthScore >= 60
+            ? 'Advanced'
+            : strengthScore >= 35
+                ? 'Rising'
+                : 'Starter';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withOpacity(0.12)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.shield_moon_rounded, color: Color(0xFF00D9FF), size: 20),
+              const SizedBox(width: 8),
+              Text(
+                'Companion strength',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.92),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                tier,
+                style: const TextStyle(
+                  color: Color(0xFF00D9FF),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Strength builds from bond, streak consistency, and total habit sync.',
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.58),
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _companionStrengthMetric(
+                  icon: Icons.bolt_rounded,
+                  label: 'Strength',
+                  value: '$strengthScore%',
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _companionStrengthMetric(
+                  icon: Icons.local_fire_department_rounded,
+                  label: 'Streak power',
+                  value: '$streakPower%',
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _companionStrengthMetric(
+                  icon: Icons.sync_rounded,
+                  label: 'Sync score',
+                  value: '$syncScore%',
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _companionStrengthMetric({
+    required IconData icon,
+    required String label,
+    required String value,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withOpacity(0.1)),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: const Color(0xFF00D9FF), size: 18),
+          const SizedBox(height: 5),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.6),
+              fontSize: 10.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _saveManualReminder(
+    BuildContext context, {
+    required Habit? selected,
+  }) {
+    final habit = selected;
+    if (habit == null) return;
+    final note = _manualReminderNoteCtrl.text.trim();
+    final now = DateTime.now();
+    final reminder = _ManualReminder(
+      habitId: habit.id,
+      habitTitle: habit.title,
+      time: _manualReminderTime,
+      note: note.isEmpty ? null : note,
+      createdAt: now,
+    );
+    setState(() {
+      _manualReminders.insert(0, reminder);
+      _reminderHistory.insert(
+        0,
+        _ReminderHistoryEntry(
+          title: 'Manual reminder set',
+          detail: '${habit.title} at ${_formatTimeOfDay(_manualReminderTime)}',
+          createdAt: now,
+        ),
+      );
+      if (_reminderHistory.length > 12) {
+        _reminderHistory.removeRange(12, _reminderHistory.length);
+      }
+      _manualReminderNoteCtrl.clear();
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Reminder saved for ${habit.title} (${_formatTimeOfDay(_manualReminderTime)})'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Widget _reminderHistoryCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withOpacity(0.1)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.history_rounded, color: Color(0xFF00D9FF), size: 18),
+              const SizedBox(width: 7),
+              Text(
+                'Reminder history',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.9),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (_reminderHistory.isEmpty)
+            Text(
+              'No reminder history yet. Set or complete a reminder to see activity here.',
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.62),
+                fontSize: 12,
+              ),
+            )
+          else
+            for (final item in _reminderHistory.take(6))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      margin: const EdgeInsets.only(top: 6),
+                      decoration: const BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Color(0xFF00D9FF),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            item.title,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 1),
+                          Text(
+                            '${item.detail} · ${_formatHistoryStamp(item.createdAt)}',
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.58),
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+        ],
+      ),
+    );
+  }
+
+  String _formatReminderClock(DateTime dt) {
+    final h24 = dt.hour;
+    final h12 = h24 % 12 == 0 ? 12 : h24 % 12;
+    final mm = dt.minute.toString().padLeft(2, '0');
+    final mer = h24 >= 12 ? 'PM' : 'AM';
+    return '$h12:$mm $mer';
+  }
+
+  String _formatTimeOfDay(TimeOfDay time) {
+    final now = DateTime.now();
+    return _formatReminderClock(
+      DateTime(
+        now.year,
+        now.month,
+        now.day,
+        time.hour,
+        time.minute,
+      ),
+    );
+  }
+
+  String _formatHistoryStamp(DateTime dt) {
+    const months = <String>[
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    final month = months[dt.month - 1];
+    return '$month ${dt.day}, ${_formatReminderClock(dt)}';
   }
 
   Widget _menuItem(
@@ -810,12 +2025,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 child: const Icon(Icons.pets, color: Color(0xFF00D9FF), size: 28),
               ),
               const SizedBox(width: 14),
-              const Expanded(
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Baby Dragon',
+                      HabitStore.instance.companionFormName,
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 18,
@@ -824,7 +2039,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     ),
                     SizedBox(height: 2),
                     Text(
-                      'Stage · Hatchling',
+                      'Stage · ${HabitStore.instance.companionStageLabel}',
                       style: TextStyle(color: Colors.white60, fontSize: 13),
                     ),
                   ],
@@ -837,7 +2052,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(
-                  'Lv. ${HabitStore.instance.level}',
+                  'Lv. ${HabitStore.instance.companionLevel}',
                   style: const TextStyle(
                     color: Color(0xFF00D9FF),
                     fontWeight: FontWeight.bold,
@@ -853,7 +2068,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
             child: LinearProgressIndicator(
-              value: HabitStore.instance.bondProgress,
+              value: HabitStore.instance.companionBondProgress,
               minHeight: 10,
               backgroundColor: Colors.white10,
               color: const Color(0xFF00D9FF),
@@ -861,7 +2076,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ),
           const SizedBox(height: 8),
           Text(
-            '${(HabitStore.instance.bondProgress * 100).round()}% bond · grows with check-ins',
+            '${(HabitStore.instance.companionBondProgress * 100).round()}% bond · grows with check-ins',
             style: const TextStyle(color: Colors.white54, fontSize: 12),
           ),
         ],
@@ -900,6 +2115,90 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         const SizedBox(width: 10),
         chip('XP today', '+120', Icons.stars_outlined),
       ],
+    );
+  }
+
+  Widget _buildAnalogReminderClock(DateTime now, {double size = 128}) {
+    final minuteAngle = (2 * math.pi) * ((now.minute + now.second / 60.0) / 60.0);
+    final hourAngle = (2 * math.pi) * (((now.hour % 12) + now.minute / 60.0) / 12.0);
+    final secondAngle = (2 * math.pi) * (now.second / 60.0);
+
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: RadialGradient(
+          colors: [
+            const Color(0xFF00D9FF).withOpacity(0.18),
+            const Color(0xFF0F1023).withOpacity(0.92),
+          ],
+          stops: const [0.18, 1.0],
+        ),
+        border: Border.all(color: const Color(0xFF00D9FF).withOpacity(0.55), width: 1.4),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF00D9FF).withOpacity(0.25),
+            blurRadius: 18,
+            spreadRadius: 1,
+          ),
+        ],
+      ),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          for (var i = 0; i < 12; i++)
+            Transform.rotate(
+              angle: (2 * math.pi * i) / 12,
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: Container(
+                  margin: EdgeInsets.only(top: size * 0.08),
+                  width: 2,
+                  height: i % 3 == 0 ? 9 : 6,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(i % 3 == 0 ? 0.9 : 0.55),
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                ),
+              ),
+            ),
+          _clockHand(angle: hourAngle, length: size * 0.24, thickness: 3.2, color: Colors.white),
+          _clockHand(angle: minuteAngle, length: size * 0.34, thickness: 2.4, color: const Color(0xFF9FEFFF)),
+          _clockHand(angle: secondAngle, length: size * 0.38, thickness: 1.3, color: const Color(0xFFFFB74D)),
+          Container(
+            width: 10,
+            height: 10,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: Color(0xFF00D9FF),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _clockHand({
+    required double angle,
+    required double length,
+    required double thickness,
+    required Color color,
+  }) {
+    return Transform.rotate(
+      angle: angle - math.pi / 2,
+      child: Align(
+        alignment: Alignment.center,
+        child: Container(
+          width: length,
+          height: thickness,
+          margin: EdgeInsets.only(left: length * 0.18),
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(99),
+          ),
+        ),
+      ),
     );
   }
 
@@ -967,9 +2266,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Widget _companionStatusUnlocksList() {
     final rows = [
-      ('Teen Dragon form', 'Reach bond level 100%'),
-      ('Monster skin set', 'Top 10 weekly leaderboard'),
-      ('Legendary aura', '30-day login streak'),
+      ('Teen Dragon form', 'Reach companion Lv. 2'),
+      ('Adult Dragon form', 'Reach companion Lv. 3'),
+      ('Monster Dragon form', 'Reach companion Lv. 4'),
     ];
     return Column(
       children: rows.map((r) {
@@ -1004,7 +2303,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildCompanionVideoFrame() {
+  Widget _buildCompanionVideoFrame({bool showLiveVideo = true}) {
+    _scheduleCompanionVideoResyncIfNeeded();
+    const cyan = Color(0xFF00D9FF);
     return Center(
       child: Container(
         width: 220,
@@ -1013,13 +2314,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(24),
           gradient: const LinearGradient(
-            colors: [Color(0xFF00D9FF), Color(0xFF6A5CFF)],
+            colors: [cyan, Color(0xFF6A5CFF)],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFF00D9FF).withOpacity(0.25),
+              color: cyan.withOpacity(0.25),
               blurRadius: 20,
               spreadRadius: 2,
             ),
@@ -1029,17 +2330,35 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           borderRadius: BorderRadius.circular(18),
           child: Container(
             color: const Color(0xFF10142B),
-            child: _babyDragonController.value.isInitialized
-                ? AspectRatio(
-                    aspectRatio: _babyDragonController.value.aspectRatio,
-                    child: VideoPlayer(_babyDragonController),
-                  )
-                : const Center(
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2.5,
-                      color: Color(0xFF00D9FF),
+            child: !showLiveVideo
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Text(
+                        'Video plays in the companion panel above while it’s open.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.62),
+                          fontSize: 12,
+                          height: 1.35,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ),
-                  ),
+                  )
+                : _babyDragonController.value.hasError
+                    ? _unsupportedVideoFallback(compact: false)
+                    : _babyDragonController.value.isInitialized
+                        ? AspectRatio(
+                            aspectRatio: _babyDragonController.value.aspectRatio,
+                            child: VideoPlayer(_babyDragonController),
+                          )
+                        : const Center(
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              color: cyan,
+                            ),
+                          ),
           ),
         ),
       ),
@@ -1154,12 +2473,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               const Text('No habits yet', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
               const SizedBox(height: 8),
               Text(
-                'Tap + to open the habit panel (name, category, templates). Use the activity wheel from there if you prefer. Tap a card to mark today done.',
+                'Tap + for the activity wheel — pick a preset or tap Custom to type your habit (name, category, notes, repeat). Tap a card to mark today done.',
                 style: TextStyle(color: Colors.white.withOpacity(0.65), fontSize: 13, height: 1.35),
               ),
               const SizedBox(height: 14),
               TextButton.icon(
-                onPressed: _showHabitCreatePanel,
+                onPressed: _openActivityRadialMenu,
                 icon: const Icon(Icons.add_circle_outline, color: Color(0xFF00D9FF)),
                 label: const Text('Add habit', style: TextStyle(color: Color(0xFF00D9FF), fontWeight: FontWeight.w700)),
               ),
@@ -1168,7 +2487,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ),
       ];
     }
-    return store.habits.map((h) => _habitTile(context, h)).toList();
+    return [_habitGrid(context, store.habits)];
+  }
+
+  Widget _habitGrid(BuildContext context, List<Habit> habits) {
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: habits.length,
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        crossAxisSpacing: 14,
+        mainAxisSpacing: 14,
+        childAspectRatio: 1.75,
+      ),
+      itemBuilder: (context, index) => _habitTile(context, habits[index]),
+    );
   }
 
   Widget _habitTile(BuildContext context, Habit h) {
@@ -1176,92 +2510,129 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final done = store.isCompletedOn(h.id, DateTime.now());
     final streak = store.habitStreak(h.id);
     final icon = _iconForHabitCategory(h.category);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 18),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(22),
-          onTap: () => store.toggleCompleteToday(h.id),
-          onLongPress: () async {
-            final ok = await showDialog<bool>(
-              context: context,
-              builder: (ctx) => AlertDialog(
-                backgroundColor: const Color(0xFF1A1B3A),
-                title: const Text('Remove habit?', style: TextStyle(color: Colors.white)),
-                content: Text('Delete “${h.title}” and its history?', style: TextStyle(color: Colors.white.withOpacity(0.8))),
-                actions: [
-                  TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-                  TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
+    final accent = _accentForHabitCategory(h.category);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(24),
+        onTap: () => store.toggleCompleteToday(h.id),
+        onLongPress: () async {
+          final ok = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: const Color(0xFF1A1B3A),
+              title: const Text('Remove habit?', style: TextStyle(color: Colors.white)),
+              content: Text('Delete “${h.title}” and its history?', style: TextStyle(color: Colors.white.withOpacity(0.8))),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
+              ],
+            ),
+          );
+          if (ok == true) await store.removeHabit(h.id);
+        },
+        child: Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF131734),
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: done
+                ? [
+                    BoxShadow(
+                      color: accent.withOpacity(0.22),
+                      blurRadius: 24,
+                      spreadRadius: 1.2,
+                      offset: const Offset(0, 6),
+                    ),
+                    BoxShadow(
+                      color: accent.withOpacity(0.08),
+                      blurRadius: 48,
+                      spreadRadius: 3,
+                    ),
+                  ]
+                : null,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 9),
+            child: Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF1B1F42),
+                borderRadius: BorderRadius.circular(22),
+                border: done
+                    ? Border.all(color: accent.withOpacity(0.34), width: 1.1)
+                    : null,
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 7,
+                    margin: const EdgeInsets.only(left: 5, top: 10, bottom: 10),
+                    decoration: BoxDecoration(
+                      color: accent,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: accent.withOpacity(0.18),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Icon(icon, color: accent, size: 24),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          h.title,
+                          style: GoogleFonts.geologica(
+                            color: Colors.white,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.1,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          'Streak: $streak days',
+                          style: GoogleFonts.geologica(
+                            color: Colors.white.withOpacity(0.72),
+                            fontSize: 12.2,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: accent,
+                          width: 3.6,
+                        ),
+                        color: done ? accent.withOpacity(0.92) : Colors.transparent,
+                      ),
+                      child: done
+                          ? const Icon(Icons.check_rounded, color: Colors.white, size: 22)
+                          : null,
+                    ),
+                  ),
                 ],
               ),
-            );
-            if (ok == true) await store.removeHabit(h.id);
-          },
-          child: Stack(
-            children: [
-              Positioned(
-                left: 4,
-                right: 0,
-                top: 4,
-                child: Container(
-                  height: 80,
-                  decoration: BoxDecoration(color: const Color(0xFF15162B), borderRadius: BorderRadius.circular(22)),
-                ),
-              ),
-              Container(
-                height: 80,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: done
-                        ? [const Color(0xFF1A3D3D), const Color(0xFF1F3038)]
-                        : [const Color(0xFF2A2B4A), const Color(0xFF1F203A)],
-                  ),
-                  borderRadius: BorderRadius.circular(22),
-                  border: Border.all(color: done ? const Color(0xFF00D9FF).withOpacity(0.45) : Colors.transparent),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF00D9FF).withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Icon(icon, color: const Color(0xFF00D9FF), size: 24),
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              h.title,
-                              style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              done ? 'Done today · streak $streak d' : 'Streak: $streak days · tap to check in',
-                              style: const TextStyle(color: Colors.white70, fontSize: 13),
-                            ),
-                          ],
-                        ),
-                      ),
-                      CircleAvatar(
-                        radius: 14,
-                        backgroundColor: done ? const Color(0xFF00D9FF) : Colors.white24,
-                        child: Icon(done ? Icons.check : Icons.circle_outlined, color: Colors.white, size: 18),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
+            ),
           ),
         ),
       ),
@@ -1808,11 +3179,6 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
-              Text(
-                'Live read on focus, habits, and momentum — no boring tables.',
-                style: TextStyle(color: Colors.white.withOpacity(0.55), fontSize: 12, height: 1.35),
-              ),
               const SizedBox(height: 22),
               Center(
                 child: SizedBox(
@@ -2069,6 +3435,12 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
       ('Move', Icons.directions_run, fr['move'] ?? 0, const Color(0xFF7AB6FF)),
       ('Mind', Icons.spa_outlined, fr['mind'] ?? 0, const Color(0xFF9D7DFF)),
       ('Learn', Icons.menu_book, fr['learn'] ?? 0, const Color(0xFFFFB86A)),
+      ('Gym', Icons.fitness_center, fr['gym'] ?? 0, const Color(0xFFFF6B8A)),
+      ('Nutrition', Icons.restaurant_menu, fr['nutrition'] ?? 0, const Color(0xFF6BCB77)),
+      ('Sleep', Icons.bedtime_outlined, fr['sleep'] ?? 0, const Color(0xFFB388FF)),
+      ('Social', Icons.groups_outlined, fr['social'] ?? 0, const Color(0xFFFFAB40)),
+      ('Creative', Icons.palette_outlined, fr['creative'] ?? 0, const Color(0xFFFF7AD9)),
+      ('Other', Icons.category_outlined, fr['other'] ?? 0, const Color(0xFF9E9E9E)),
     ];
     return Column(
       children: [
@@ -2080,10 +3452,10 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
                 Icon(icon, color: col.withOpacity(0.9), size: 20),
                 const SizedBox(width: 8),
                 SizedBox(
-                  width: 52,
+                  width: 68,
                   child: Text(
                     name,
-                    style: TextStyle(color: Colors.white.withOpacity(0.82), fontSize: 12, fontWeight: FontWeight.w700),
+                    style: TextStyle(color: Colors.white.withOpacity(0.82), fontSize: 11, fontWeight: FontWeight.w700),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -3027,8 +4399,8 @@ String _habitTeacherReply(String userMessage) {
         "(coffee, brushing teeth), stack your new habit. Start so small it feels silly to skip.";
   }
   if (s.contains('start') || s.contains('begin') || s.contains('new habit')) {
-    return "One habit at a time. Name it clearly, pick Focus / Move / Mind / Learn, and add it in Kultivate. "
-        "Use the **Open habit creator** chip below when you’re ready to lock it in.";
+    return "One habit at a time. Name it clearly, pick a category (Focus, Move, Gym, Nutrition, Sleep, Social, Creative, …), "
+        "and add it in Kultivate. Use the **Open habit creator** chip below when you’re ready to lock it in.";
   }
   if (s.contains('time') || s.contains('busy') || s.contains('schedule')) {
     return "Shrink the commitment: two minutes still counts. One page, one lap, one minute of breath—"
@@ -3338,38 +4710,308 @@ class _HabitCreateSheet extends StatefulWidget {
   const _HabitCreateSheet({
     required this.scrollController,
     required this.onOpenActivityWheel,
+    this.initialTitle,
+    this.initialCategory,
   });
 
   final ScrollController scrollController;
   final VoidCallback onOpenActivityWheel;
+  final String? initialTitle;
+  final String? initialCategory;
 
   @override
   State<_HabitCreateSheet> createState() => _HabitCreateSheetState();
 }
 
+List<(String label, IconData icon)> _activityPresetsForCategory(String cat) {
+  return _kActivityPresets.where((e) => _categoryForRadialLabel(e.$1) == cat).toList();
+}
+
 class _HabitCreateSheetState extends State<_HabitCreateSheet> {
   final TextEditingController _titleCtrl = TextEditingController();
+  final TextEditingController _notesCtrl = TextEditingController();
+  final TextEditingController _learnTopicCtrl = TextEditingController();
   String _category = 'focus';
+  String _frequency = 'daily';
   bool _saving = false;
 
-  static const List<(String id, String label)> _categories = [
-    ('focus', 'Focus'),
-    ('move', 'Move'),
-    ('mind', 'Mind'),
-    ('learn', 'Learn'),
+  /// Focus playbook
+  String? _focusWorkMode;
+  int? _focusMinutes;
+  String? _focusCue;
+
+  /// Move playbook
+  String? _moveKind;
+  int? _moveMinutes;
+  String? _moveIntensity;
+
+  /// Mind playbook
+  String? _mindKind;
+  int? _mindMinutes;
+  String? _mindSlot;
+
+  /// Learn playbook
+  String? _learnFormat;
+  int? _learnMinutes;
+
+  /// Gym playbook
+  String? _gymSplit;
+  int? _gymMinutes;
+  String? _gymStyle;
+
+  /// Nutrition playbook
+  String? _nutritionFocus;
+  String? _nutritionMeal;
+  String? _nutritionExtra;
+
+  /// Sleep playbook
+  String? _sleepTarget;
+  String? _sleepHabit;
+
+  /// Social playbook
+  String? _socialType;
+  String? _socialCadence;
+
+  /// Creative playbook
+  String? _creativeMedium;
+  int? _creativeMinutes;
+
+  static const List<(String id, String label, String blurb)> _categoryCards = [
+    ('focus', 'Focus', 'Deep work & attention'),
+    ('move', 'Move', 'Body & energy'),
+    ('mind', 'Mind', 'Calm & reflection'),
+    ('learn', 'Learn', 'Skills & knowledge'),
+    ('gym', 'Gym', 'Weights & training'),
+    ('nutrition', 'Nutrition', 'Food & hydration'),
+    ('sleep', 'Sleep', 'Rest & recovery'),
+    ('social', 'Social', 'People & connection'),
+    ('creative', 'Creative', 'Art & hobbies'),
   ];
+
+  static bool _isKnownCategoryId(String id) =>
+      _categoryCards.any((c) => c.$1 == id);
+
+  @override
+  void initState() {
+    super.initState();
+    final t = widget.initialTitle?.trim();
+    if (t != null && t.isNotEmpty) {
+      _titleCtrl.text = t;
+    }
+    final c = widget.initialCategory?.trim();
+    if (c != null && c.isNotEmpty && _isKnownCategoryId(c)) {
+      _category = c;
+    }
+  }
 
   @override
   void dispose() {
     _titleCtrl.dispose();
+    _notesCtrl.dispose();
+    _learnTopicCtrl.dispose();
     super.dispose();
   }
 
+  String _titleSuffixFromPlaybook() {
+    final parts = <String>[];
+    switch (_category) {
+      case 'focus':
+        final rawName = _titleCtrl.text.trim();
+        final implicit = rawName.isNotEmpty ? null : _defaultTitleIfNameEmpty();
+        if (_focusWorkMode != null &&
+            _focusWorkMode != rawName &&
+            _focusWorkMode != implicit) {
+          parts.add(_focusWorkMode!);
+        }
+        if (_focusMinutes != null) {
+          final minutesOnlyName = rawName.isEmpty &&
+              _focusWorkMode == null &&
+              _focusCue == null;
+          if (!minutesOnlyName) parts.add('${_focusMinutes}m block');
+        }
+        if (_focusCue != null) {
+          final cueOnlyName = rawName.isEmpty &&
+              _focusWorkMode == null &&
+              _focusMinutes == null;
+          if (!cueOnlyName) parts.add(_focusCue!);
+        }
+        break;
+      case 'move':
+        final rawName = _titleCtrl.text.trim();
+        final implicit = rawName.isNotEmpty ? null : _defaultTitleIfNameEmpty();
+        if (_moveKind != null && _moveKind != rawName && _moveKind != implicit) {
+          parts.add(_moveKind!);
+        }
+        if (_moveMinutes != null) {
+          final minutesOnlyName = rawName.isEmpty &&
+              _moveKind == null &&
+              _moveIntensity == null;
+          if (!minutesOnlyName) parts.add('${_moveMinutes}m');
+        }
+        if (_moveIntensity != null &&
+            _moveIntensity != rawName &&
+            _moveIntensity != implicit) {
+          parts.add(_moveIntensity!);
+        }
+        break;
+      case 'mind':
+        final rawName = _titleCtrl.text.trim();
+        final implicit = rawName.isNotEmpty ? null : _defaultTitleIfNameEmpty();
+        if (_mindKind != null && _mindKind != rawName && _mindKind != implicit) {
+          parts.add(_mindKind!);
+        }
+        if (_mindMinutes != null) {
+          final minutesOnlyName =
+              rawName.isEmpty && _mindKind == null && _mindSlot == null;
+          if (!minutesOnlyName) parts.add('${_mindMinutes}m');
+        }
+        if (_mindSlot != null) {
+          final slotOnlyName =
+              rawName.isEmpty && _mindKind == null && _mindMinutes == null;
+          if (!slotOnlyName) parts.add(_mindSlot!);
+        }
+        break;
+      case 'learn':
+        final rawName = _titleCtrl.text.trim();
+        final topic = _learnTopicCtrl.text.trim();
+        final usingAsName = rawName.isNotEmpty
+            ? rawName
+            : (topic.isNotEmpty ? topic : _learnFormat);
+        if (_learnFormat != null && _learnFormat != usingAsName) {
+          parts.add(_learnFormat!);
+        }
+        if (_learnMinutes != null) parts.add('${_learnMinutes}m sessions');
+        if (topic.isNotEmpty && rawName.isNotEmpty) parts.add(topic);
+        break;
+      case 'gym':
+        final rawName = _titleCtrl.text.trim();
+        final implicit = rawName.isNotEmpty ? null : _defaultTitleIfNameEmpty();
+        if (_gymSplit != null && _gymSplit != rawName && _gymSplit != implicit) {
+          parts.add(_gymSplit!);
+        }
+        if (_gymMinutes != null) {
+          final minutesOnly = rawName.isEmpty && _gymSplit == null && _gymStyle == null;
+          if (!minutesOnly) parts.add('${_gymMinutes}m');
+        }
+        if (_gymStyle != null && _gymStyle != rawName && _gymStyle != implicit) {
+          parts.add(_gymStyle!);
+        }
+        break;
+      case 'nutrition':
+        final rawName = _titleCtrl.text.trim();
+        final implicit = rawName.isNotEmpty ? null : _defaultTitleIfNameEmpty();
+        if (_nutritionFocus != null && _nutritionFocus != rawName && _nutritionFocus != implicit) {
+          parts.add(_nutritionFocus!);
+        }
+        if (_nutritionMeal != null && _nutritionMeal != rawName && _nutritionMeal != implicit) {
+          parts.add(_nutritionMeal!);
+        }
+        if (_nutritionExtra != null && _nutritionExtra != rawName && _nutritionExtra != implicit) {
+          parts.add(_nutritionExtra!);
+        }
+        break;
+      case 'sleep':
+        final rawName = _titleCtrl.text.trim();
+        final implicit = rawName.isNotEmpty ? null : _defaultTitleIfNameEmpty();
+        if (_sleepTarget != null && _sleepTarget != rawName && _sleepTarget != implicit) {
+          parts.add(_sleepTarget!);
+        }
+        if (_sleepHabit != null && _sleepHabit != rawName && _sleepHabit != implicit) {
+          parts.add(_sleepHabit!);
+        }
+        break;
+      case 'social':
+        final rawName = _titleCtrl.text.trim();
+        final implicit = rawName.isNotEmpty ? null : _defaultTitleIfNameEmpty();
+        if (_socialType != null && _socialType != rawName && _socialType != implicit) {
+          parts.add(_socialType!);
+        }
+        if (_socialCadence != null && _socialCadence != rawName && _socialCadence != implicit) {
+          parts.add(_socialCadence!);
+        }
+        break;
+      case 'creative':
+        final rawName = _titleCtrl.text.trim();
+        final implicit = rawName.isNotEmpty ? null : _defaultTitleIfNameEmpty();
+        if (_creativeMedium != null && _creativeMedium != rawName && _creativeMedium != implicit) {
+          parts.add(_creativeMedium!);
+        }
+        if (_creativeMinutes != null) {
+          final minutesOnly = rawName.isEmpty && _creativeMedium == null;
+          if (!minutesOnly) parts.add('${_creativeMinutes}m');
+        }
+        break;
+    }
+    if (parts.isEmpty) return '';
+    return ' · ${parts.join(' · ')}';
+  }
+
+  String? _defaultTitleIfNameEmpty() {
+    switch (_category) {
+      case 'focus':
+        if (_focusWorkMode != null) return _focusWorkMode;
+        if (_focusMinutes != null) return '${_focusMinutes}m focus';
+        if (_focusCue != null) return 'Focus · ${_focusCue!}';
+        return null;
+      case 'move':
+        if (_moveKind != null) return _moveKind;
+        if (_moveMinutes != null) return '${_moveMinutes}m movement';
+        if (_moveIntensity != null) return _moveIntensity;
+        return null;
+      case 'mind':
+        if (_mindKind != null) return _mindKind;
+        if (_mindMinutes != null) return '${_mindMinutes}m mindful';
+        if (_mindSlot != null) return _mindSlot;
+        return null;
+      case 'learn':
+        final t = _learnTopicCtrl.text.trim();
+        if (t.isNotEmpty) return t;
+        return _learnFormat;
+      case 'gym':
+        if (_gymSplit != null) return _gymSplit;
+        if (_gymMinutes != null) return '${_gymMinutes}m gym';
+        if (_gymStyle != null) return 'Gym · ${_gymStyle!}';
+        return null;
+      case 'nutrition':
+        if (_nutritionFocus != null) return _nutritionFocus;
+        if (_nutritionMeal != null) return _nutritionMeal;
+        if (_nutritionExtra != null) return _nutritionExtra;
+        return null;
+      case 'sleep':
+        if (_sleepTarget != null) return _sleepTarget;
+        if (_sleepHabit != null) return _sleepHabit;
+        return null;
+      case 'social':
+        if (_socialType != null) return _socialType;
+        if (_socialCadence != null) return _socialCadence;
+        return null;
+      case 'creative':
+        if (_creativeMedium != null) return _creativeMedium;
+        if (_creativeMinutes != null) return '${_creativeMinutes}m creative';
+        return null;
+      default:
+        return null;
+    }
+  }
+
+  bool get _canSubmit {
+    if (_saving) return false;
+    return _titleCtrl.text.trim().isNotEmpty;
+  }
+
   Future<void> _submit() async {
-    final t = _titleCtrl.text.trim();
-    if (t.isEmpty || _saving) return;
+    if (!_canSubmit) return;
+    var t = _titleCtrl.text.trim();
+    final suffix = _titleSuffixFromPlaybook();
+    if (suffix.isNotEmpty) t = '$t$suffix';
+    final notesRaw = _notesCtrl.text.trim();
     setState(() => _saving = true);
-    await HabitStore.instance.addHabit(title: t, category: _category);
+    await HabitStore.instance.addHabit(
+      title: t,
+      category: _category,
+      notes: notesRaw.isEmpty ? null : notesRaw,
+      frequency: _frequency,
+    );
     if (!mounted) return;
     Navigator.of(context).pop();
   }
@@ -3382,10 +5024,537 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
     });
   }
 
+  void _setCategory(String id) {
+    setState(() => _category = id);
+  }
+
+  Widget _playbookSectionLabel(String title, String subtitle) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.92),
+              fontSize: 15,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            subtitle,
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.48),
+              fontSize: 12,
+              height: 1.3,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _pillRow<T>({
+    required List<T> values,
+    required T? selected,
+    required String Function(T) label,
+    required void Function(T?) onSelect,
+  }) {
+    const cyan = Color(0xFF00D9FF);
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final v in values)
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(999),
+              onTap: () => setState(() {
+                onSelect(selected == v ? null : v);
+              }),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(999),
+                  color: selected == v ? cyan.withOpacity(0.2) : const Color(0xFF0F1023),
+                  border: Border.all(
+                    color: selected == v ? cyan : Colors.white.withOpacity(0.14),
+                    width: selected == v ? 1.4 : 1,
+                  ),
+                ),
+                child: Text(
+                  label(v),
+                  style: TextStyle(
+                    color: selected == v ? Colors.white : Colors.white70,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildFrequencyRow() {
+    const cyan = Color(0xFF00D9FF);
+    const options = <(String id, String label)>[
+      ('daily', 'Every day'),
+      ('weekdays', 'Weekdays'),
+      ('weekly', 'Once a week'),
+    ];
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final (id, label) in options)
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(999),
+              onTap: () => setState(() => _frequency = id),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(999),
+                  color: _frequency == id ? cyan.withOpacity(0.2) : const Color(0xFF0F1023),
+                  border: Border.all(
+                    color: _frequency == id ? cyan : Colors.white.withOpacity(0.14),
+                    width: _frequency == id ? 1.4 : 1,
+                  ),
+                ),
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    color: _frequency == id ? Colors.white : Colors.white70,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildCategoryPlaybook() {
+    const cyan = Color(0xFF00D9FF);
+    switch (_category) {
+      case 'focus':
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _playbookSectionLabel(
+              'Attention blueprint',
+              'Pick how you work and for how long — we fold it into your habit name.',
+            ),
+            Text(
+              'Work mode',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<String>(
+              values: const [
+                'Deep work',
+                'Admin & email',
+                'Creative flow',
+                'Study block',
+              ],
+              selected: _focusWorkMode,
+              label: (s) => s,
+              onSelect: (v) => _focusWorkMode = v,
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'Target block',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<int>(
+              values: const [15, 25, 45, 60],
+              selected: _focusMinutes,
+              label: (m) => '${m}m',
+              onSelect: (v) => _focusMinutes = v,
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'Start cue',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<String>(
+              values: const [
+                'First thing',
+                'After coffee',
+                'Post-lunch',
+                'Evening sprint',
+              ],
+              selected: _focusCue,
+              label: (s) => s,
+              onSelect: (v) => _focusCue = v,
+            ),
+          ],
+        );
+      case 'move':
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _playbookSectionLabel(
+              'Movement recipe',
+              'Dial in type, duration, and effort so check-ins feel concrete.',
+            ),
+            Text(
+              'Activity',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<String>(
+              values: const ['Walk', 'Run', 'Cycle', 'Strength', 'Stretch', 'Sports'],
+              selected: _moveKind,
+              label: (s) => s,
+              onSelect: (v) => _moveKind = v,
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'Duration',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<int>(
+              values: const [10, 20, 30, 45, 60],
+              selected: _moveMinutes,
+              label: (m) => '${m}m',
+              onSelect: (v) => _moveMinutes = v,
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'Effort',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<String>(
+              values: const ['Light', 'Moderate', 'Push day'],
+              selected: _moveIntensity,
+              label: (s) => s,
+              onSelect: (v) => _moveIntensity = v,
+            ),
+          ],
+        );
+      case 'mind':
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _playbookSectionLabel(
+              'Mindful stack',
+              'Match practice, length, and the part of your day you protect.',
+            ),
+            Text(
+              'Practice',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<String>(
+              values: const ['Meditation', 'Breathwork', 'Journal', 'Gratitude'],
+              selected: _mindKind,
+              label: (s) => s,
+              onSelect: (v) => _mindKind = v,
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'Length',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<int>(
+              values: const [5, 10, 15, 20],
+              selected: _mindMinutes,
+              label: (m) => '${m}m',
+              onSelect: (v) => _mindMinutes = v,
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'Rhythm',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<String>(
+              values: const ['Morning', 'Midday reset', 'Before bed'],
+              selected: _mindSlot,
+              label: (s) => s,
+              onSelect: (v) => _mindSlot = v,
+            ),
+          ],
+        );
+      case 'learn':
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _playbookSectionLabel(
+              'Learning loop',
+              'Format, session size, and what you are leveling up.',
+            ),
+            Text(
+              'Format',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<String>(
+              values: const [
+                'Reading',
+                'Video course',
+                'Hands-on practice',
+                'Language',
+                'Flashcards',
+              ],
+              selected: _learnFormat,
+              label: (s) => s,
+              onSelect: (v) => _learnFormat = v,
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'Session size',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<int>(
+              values: const [15, 25, 45, 60],
+              selected: _learnMinutes,
+              label: (m) => '${m}m',
+              onSelect: (v) => _learnMinutes = v,
+            ),
+            const SizedBox(height: 18),
+            TextField(
+              controller: _learnTopicCtrl,
+              style: const TextStyle(color: Colors.white, fontSize: 15),
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                hintText: 'Skill, book, or course (optional)',
+                hintStyle: TextStyle(color: Colors.white.withOpacity(0.38)),
+                labelText: 'What are you learning?',
+                labelStyle: TextStyle(color: Colors.white.withOpacity(0.6)),
+                filled: true,
+                fillColor: const Color(0xFF0F1023),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(color: Colors.white.withOpacity(0.12)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(color: Colors.white.withOpacity(0.12)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: const BorderSide(color: cyan, width: 1.4),
+                ),
+              ),
+            ),
+          ],
+        );
+      case 'gym':
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _playbookSectionLabel(
+              'Training setup',
+              'Split, duration, and intensity — added to your habit name.',
+            ),
+            Text(
+              'Focus',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<String>(
+              values: const ['Push', 'Pull', 'Legs', 'Full body', 'Cardio', 'HIIT'],
+              selected: _gymSplit,
+              label: (s) => s,
+              onSelect: (v) => _gymSplit = v,
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'Duration',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<int>(
+              values: const [20, 30, 45, 60],
+              selected: _gymMinutes,
+              label: (m) => '${m}m',
+              onSelect: (v) => _gymMinutes = v,
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'Style',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<String>(
+              values: const ['Heavy', 'Moderate', 'Deload', 'PR attempt'],
+              selected: _gymStyle,
+              label: (s) => s,
+              onSelect: (v) => _gymStyle = v,
+            ),
+          ],
+        );
+      case 'nutrition':
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _playbookSectionLabel(
+              'Nutrition plan',
+              'What you are optimizing and when you eat.',
+            ),
+            Text(
+              'Goal',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<String>(
+              values: const ['Hydration', 'Protein', 'Whole foods', 'Meal timing', 'Less sugar'],
+              selected: _nutritionFocus,
+              label: (s) => s,
+              onSelect: (v) => _nutritionFocus = v,
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'Meal',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<String>(
+              values: const ['Breakfast', 'Lunch', 'Dinner', 'Snacks'],
+              selected: _nutritionMeal,
+              label: (s) => s,
+              onSelect: (v) => _nutritionMeal = v,
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'Log style',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<String>(
+              values: const ['Photo log', 'Calorie note', 'Simple check-in'],
+              selected: _nutritionExtra,
+              label: (s) => s,
+              onSelect: (v) => _nutritionExtra = v,
+            ),
+          ],
+        );
+      case 'sleep':
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _playbookSectionLabel(
+              'Sleep stack',
+              'Targets and wind-down cues for better nights.',
+            ),
+            Text(
+              'Target',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<String>(
+              values: const ['7h sleep', '8h+ sleep', 'Same bedtime', 'Same wake time'],
+              selected: _sleepTarget,
+              label: (s) => s,
+              onSelect: (v) => _sleepTarget = v,
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'Habit',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<String>(
+              values: const ['No screens', 'Read', 'Stretch', 'Dim lights', 'Cool room'],
+              selected: _sleepHabit,
+              label: (s) => s,
+              onSelect: (v) => _sleepHabit = v,
+            ),
+          ],
+        );
+      case 'social':
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _playbookSectionLabel(
+              'Connection',
+              'How you show up for people — merged into the title.',
+            ),
+            Text(
+              'Type',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<String>(
+              values: const ['Call', 'Text', 'In person', 'Family time', 'Community'],
+              selected: _socialType,
+              label: (s) => s,
+              onSelect: (v) => _socialType = v,
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'Cadence',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<String>(
+              values: const ['Daily check-in', 'Weekly date', 'Monthly catch-up'],
+              selected: _socialCadence,
+              label: (s) => s,
+              onSelect: (v) => _socialCadence = v,
+            ),
+          ],
+        );
+      case 'creative':
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _playbookSectionLabel(
+              'Creative practice',
+              'Medium and session length for your craft.',
+            ),
+            Text(
+              'Medium',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<String>(
+              values: const ['Writing', 'Music', 'Drawing', 'Photography', 'Side project'],
+              selected: _creativeMedium,
+              label: (s) => s,
+              onSelect: (v) => _creativeMedium = v,
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'Session',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _pillRow<int>(
+              values: const [15, 30, 45, 60],
+              selected: _creativeMinutes,
+              label: (m) => '${m}m',
+              onSelect: (v) => _creativeMinutes = v,
+            ),
+          ],
+        );
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     const cyan = Color(0xFF00D9FF);
-    final canSubmit = _titleCtrl.text.trim().isNotEmpty && !_saving;
+    final presets = _activityPresetsForCategory(_category);
 
     return Container(
       decoration: const BoxDecoration(
@@ -3432,11 +5601,28 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
               controller: widget.scrollController,
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 28),
               children: [
+                Text(
+                  '1 · Your habit',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.5),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.6,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  widget.initialTitle != null && widget.initialTitle!.trim().isNotEmpty
+                      ? 'You picked this from the wheel — category is set below. Add notes, repeat, and optional details, then save.'
+                      : 'Type a clear name you can check off. Optional fields help you remember why and how often.',
+                  style: TextStyle(color: Colors.white.withOpacity(0.42), fontSize: 11, height: 1.35),
+                ),
+                const SizedBox(height: 12),
                 TextField(
                   controller: _titleCtrl,
                   style: const TextStyle(color: Colors.white, fontSize: 16),
                   decoration: InputDecoration(
-                    hintText: 'What will you track?',
+                    hintText: 'e.g. Drink 8 glasses of water',
                     hintStyle: TextStyle(color: Colors.white.withOpacity(0.45)),
                     labelText: 'Habit name',
                     labelStyle: TextStyle(color: Colors.white.withOpacity(0.65)),
@@ -3455,13 +5641,50 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
                       borderSide: const BorderSide(color: cyan, width: 1.4),
                     ),
                   ),
-                  textInputAction: TextInputAction.done,
+                  textInputAction: TextInputAction.next,
                   onChanged: (_) => setState(() {}),
-                  onSubmitted: (_) => _submit(),
                 ),
+                const SizedBox(height: 16),
+                Text(
+                  'Why / reminder (optional)',
+                  style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _notesCtrl,
+                  style: const TextStyle(color: Colors.white, fontSize: 15),
+                  minLines: 2,
+                  maxLines: 4,
+                  decoration: InputDecoration(
+                    hintText: 'Motivation, trigger, or a detail for future you…',
+                    hintStyle: TextStyle(color: Colors.white.withOpacity(0.38)),
+                    filled: true,
+                    fillColor: const Color(0xFF0F1023),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(color: Colors.white.withOpacity(0.12)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(color: Colors.white.withOpacity(0.12)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: const BorderSide(color: cyan, width: 1.4),
+                    ),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Repeat',
+                  style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                _buildFrequencyRow(),
                 const SizedBox(height: 22),
                 Text(
-                  'Category',
+                  '2 · Category',
                   style: TextStyle(
                     color: Colors.white.withOpacity(0.5),
                     fontSize: 12,
@@ -3470,42 +5693,76 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
                   ),
                 ),
                 const SizedBox(height: 10),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
+                GridView.count(
+                  crossAxisCount: 3,
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  mainAxisSpacing: 10,
+                  crossAxisSpacing: 10,
+                  childAspectRatio: 0.92,
                   children: [
-                    for (final (id, label) in _categories)
+                    for (final (id, label, blurb) in _categoryCards)
                       Material(
                         color: Colors.transparent,
                         child: InkWell(
-                          onTap: () => setState(() => _category = id),
-                          borderRadius: BorderRadius.circular(14),
+                          borderRadius: BorderRadius.circular(16),
+                          onTap: () => _setCategory(id),
                           child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 180),
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                            duration: const Duration(milliseconds: 200),
+                            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
                             decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(14),
-                              color: _category == id ? cyan.withOpacity(0.18) : const Color(0xFF0F1023),
+                              borderRadius: BorderRadius.circular(16),
+                              gradient: _category == id
+                                  ? LinearGradient(
+                                      colors: [
+                                        cyan.withOpacity(0.22),
+                                        const Color(0xFF0F1023),
+                                      ],
+                                      begin: Alignment.topLeft,
+                                      end: Alignment.bottomRight,
+                                    )
+                                  : null,
+                              color: _category == id ? null : const Color(0xFF0F1023),
                               border: Border.all(
                                 color: _category == id ? cyan : Colors.white.withOpacity(0.12),
-                                width: _category == id ? 1.4 : 1,
+                                width: _category == id ? 1.6 : 1,
                               ),
+                              boxShadow: _category == id
+                                  ? [
+                                      BoxShadow(
+                                        color: cyan.withOpacity(0.18),
+                                        blurRadius: 12,
+                                        spreadRadius: 0,
+                                      ),
+                                    ]
+                                  : null,
                             ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.center,
                               children: [
                                 Icon(
                                   _iconForHabitCategory(id),
-                                  size: 20,
+                                  size: 22,
                                   color: _category == id ? cyan : Colors.white54,
                                 ),
-                                const SizedBox(width: 8),
+                                const SizedBox(height: 6),
                                 Text(
                                   label,
                                   style: TextStyle(
-                                    color: _category == id ? Colors.white : Colors.white70,
-                                    fontWeight: FontWeight.w600,
+                                    color: Colors.white.withOpacity(_category == id ? 1 : 0.88),
+                                    fontWeight: FontWeight.w800,
                                     fontSize: 14,
+                                  ),
+                                ),
+                                Text(
+                                  blurb,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: Colors.white.withOpacity(0.45),
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w500,
                                   ),
                                 ),
                               ],
@@ -3515,7 +5772,44 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
                       ),
                   ],
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 22),
+                Text(
+                  '3 · Optional detail',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.5),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.6,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Extras are merged into the habit name (duration, cue, format…). Skip if your name above is enough.',
+                  style: TextStyle(color: Colors.white.withOpacity(0.42), fontSize: 11, height: 1.35),
+                ),
+                const SizedBox(height: 12),
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 280),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  transitionBuilder: (child, anim) {
+                    return FadeTransition(
+                      opacity: anim,
+                      child: SlideTransition(
+                        position: Tween<Offset>(
+                          begin: const Offset(0.04, 0),
+                          end: Offset.zero,
+                        ).animate(anim),
+                        child: child,
+                      ),
+                    );
+                  },
+                  child: KeyedSubtree(
+                    key: ValueKey<String>(_category),
+                    child: _buildCategoryPlaybook(),
+                  ),
+                ),
+                const SizedBox(height: 22),
                 Text(
                   'Quick templates',
                   style: TextStyle(
@@ -3525,12 +5819,17 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
                     letterSpacing: 0.6,
                   ),
                 ),
+                const SizedBox(height: 6),
+                Text(
+                  'Matched to your lane',
+                  style: TextStyle(color: Colors.white.withOpacity(0.38), fontSize: 11),
+                ),
                 const SizedBox(height: 10),
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
                   children: [
-                    for (final (label, icon) in _kActivityPresets)
+                    for (final (label, icon) in presets)
                       ActionChip(
                         avatar: Icon(icon, size: 18, color: cyan),
                         label: Text(label),
@@ -3546,7 +5845,7 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton(
-                    onPressed: canSubmit ? _submit : null,
+                    onPressed: _canSubmit ? _submit : null,
                     style: FilledButton.styleFrom(
                       backgroundColor: cyan,
                       foregroundColor: Colors.white,
@@ -3592,13 +5891,17 @@ class RadialActivityPickerOverlay extends StatefulWidget {
     required this.fabSize,
     required this.onClose,
     this.onPickActivity,
+    this.onPresetChosen,
     this.onAfterCustomHabit,
   });
 
   final Offset fabTopLeft;
   final Size fabSize;
   final VoidCallback onClose;
+  /// Legacy: add habit immediately (unused when [onPresetChosen] is set).
   final Future<void> Function(String title, String category)? onPickActivity;
+  /// Opens the full habit form after dismiss; pass preset label + category.
+  final void Function(String title, String category)? onPresetChosen;
   final Future<void> Function()? onAfterCustomHabit;
 
   @override
@@ -3678,13 +5981,9 @@ class _RadialActivityPickerOverlayState extends State<RadialActivityPickerOverla
     final hubCy = mqSize.height / 2;
     final fabCx = widget.fabTopLeft.dx + widget.fabSize.width / 2;
     final fabCy = widget.fabTopLeft.dy + widget.fabSize.height / 2;
-    // Larger radius + wider arc = more space between each circular slot.
-    const radius = 175.0;
-    const chipW = 76.0;
-    const chipH = 92.0;
+    const chipW = 68.0;
+    const chipH = 84.0;
     final n = _activities.length;
-    final startAngle = -math.pi / 2 - math.pi / 1.72;
-    final endAngle = -math.pi / 2 + math.pi / 1.72;
 
     /// GTA-style: heavy blur + dark radial falloff from the hub (still dismiss via [Listener]).
     /// [vignetteX]/[vignetteY] are Alignment coordinates (-1..1) derived from current hub position.
@@ -3740,6 +6039,11 @@ class _RadialActivityPickerOverlayState extends State<RadialActivityPickerOverla
             final curHubY = fabCy + (hubCy - fabCy) * t;
             final vignetteX = ((curHubX / mqSize.width).clamp(0.001, 0.999)) * 2 - 1;
             final vignetteY = ((curHubY / mqSize.height).clamp(0.001, 0.999)) * 2 - 1;
+            // Full 360° ring; use most of safe margin so neighbors have more arc length between them.
+            final edgePad = 6.0;
+            final maxRx = (math.min(curHubX, mqSize.width - curHubX) - chipW / 2 - edgePad).clamp(68.0, 400.0);
+            final maxRy = (math.min(curHubY, mqSize.height - curHubY) - chipH / 2 - edgePad).clamp(68.0, 400.0);
+            final ringRadius = math.min(206.0, math.min(maxRx, maxRy));
             return Stack(
               fit: StackFit.expand,
               clipBehavior: Clip.none,
@@ -3753,9 +6057,37 @@ class _RadialActivityPickerOverlayState extends State<RadialActivityPickerOverla
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: () async {
-                        await _dismiss();
-                        if (widget.onAfterCustomHabit != null) {
-                          await widget.onAfterCustomHabit!();
+                        if (_dismissing) return;
+                        _dismissing = true;
+                        try {
+                          if (_controller.status != AnimationStatus.dismissed) {
+                            await _controller.reverse();
+                          }
+                        } catch (_) {}
+                        if (!mounted) return;
+                        // Pop the route here — [await _dismiss] only schedules [onClose] on the next
+                        // frame, so opening the bottom sheet immediately left the dialog on the stack
+                        // and blocked all touches ("stuck").
+                        final after = widget.onAfterCustomHabit;
+                        Navigator.of(context, rootNavigator: true).pop();
+                        if (after != null) {
+                          void runAfter() {
+                            after();
+                          }
+                          if (kIsWeb) {
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                Future<void>.delayed(
+                                  const Duration(milliseconds: 48),
+                                  runAfter,
+                                );
+                              });
+                            });
+                          } else {
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              runAfter();
+                            });
+                          }
                         }
                       },
                       child: Container(
@@ -3796,12 +6128,12 @@ class _RadialActivityPickerOverlayState extends State<RadialActivityPickerOverla
                   ),
                 ),
                 ...List<Widget>.generate(n, (i) {
-                  final baseAngle = n <= 1
-                      ? -math.pi / 2
-                      : startAngle + (endAngle - startAngle) * (i / (n - 1));
+                  // Even spacing on a full circle, starting from top (-π/2), clockwise.
+                  final baseAngle =
+                      n <= 1 ? -math.pi / 2 : -math.pi / 2 + (2 * math.pi * i) / n;
                   // Slow continuous orbit around the center "Custom" hub.
                   final angle = baseAngle + orbitPhase;
-                  final r = radius * t;
+                  final r = ringRadius * t;
                   final dx = math.cos(angle) * r;
                   final dy = math.sin(angle) * r;
                   final (String label, IconData icon) = _activities[i];
@@ -3816,8 +6148,11 @@ class _RadialActivityPickerOverlayState extends State<RadialActivityPickerOverla
                           label: label,
                           icon: icon,
                           onTap: () async {
-                            if (widget.onPickActivity != null) {
-                              await widget.onPickActivity!(label, _categoryForRadialLabel(label));
+                            final category = _categoryForRadialLabel(label);
+                            if (widget.onPresetChosen != null) {
+                              widget.onPresetChosen!(label, category);
+                            } else if (widget.onPickActivity != null) {
+                              await widget.onPickActivity!(label, category);
                             }
                             await _dismiss();
                           },
@@ -3856,25 +6191,25 @@ class _ActivityChip extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 58,
-            height: 58,
+            width: 50,
+            height: 50,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: Colors.black.withOpacity(0.82),
-              border: Border.all(color: cyan.withOpacity(0.65), width: 2),
+              border: Border.all(color: cyan.withOpacity(0.65), width: 1.75),
               boxShadow: [
                 BoxShadow(
                   color: cyan.withOpacity(0.35),
-                  blurRadius: 14,
+                  blurRadius: 12,
                   spreadRadius: 0,
                 ),
               ],
             ),
-            child: Icon(icon, size: 26, color: cyan),
+            child: Icon(icon, size: 23, color: cyan),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 5),
           SizedBox(
-            width: 76,
+            width: 68,
             child: Text(
               label,
               textAlign: TextAlign.center,
@@ -3883,8 +6218,8 @@ class _ActivityChip extends StatelessWidget {
               style: TextStyle(
                 color: Colors.white.withOpacity(0.95),
                 fontWeight: FontWeight.w700,
-                fontSize: 11,
-                height: 1.1,
+                fontSize: 10,
+                height: 1.12,
                 shadows: const [
                   Shadow(color: Colors.black87, blurRadius: 6, offset: Offset(0, 1)),
                 ],

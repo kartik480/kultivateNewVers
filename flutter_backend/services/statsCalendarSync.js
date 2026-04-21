@@ -153,23 +153,32 @@ function dayKeyFromUtcDate(d) {
   return d.toISOString().slice(0, 10);
 }
 
+const HABIT_CATEGORY_KEYS = [
+  "focus",
+  "move",
+  "mind",
+  "learn",
+  "gym",
+  "nutrition",
+  "sleep",
+  "social",
+  "creative",
+  "other",
+];
+
 function categoryFractionsFromHabits(habits) {
-  const keys = ["focus", "move", "mind", "learn"];
-  const counts = { focus: 0, move: 0, mind: 0, learn: 0 };
+  const counts = Object.fromEntries(HABIT_CATEGORY_KEYS.map((k) => [k, 0]));
   for (const h of habits) {
-    const c = keys.includes(h.category) ? h.category : "focus";
+    const c = HABIT_CATEGORY_KEYS.includes(h.category) ? h.category : "other";
     counts[c]++;
   }
   const total = habits.length;
   if (!total) {
-    return { focus: 0, move: 0, mind: 0, learn: 0 };
+    return Object.fromEntries(HABIT_CATEGORY_KEYS.map((k) => [k, 0]));
   }
-  return {
-    focus: counts.focus / total,
-    move: counts.move / total,
-    mind: counts.mind / total,
-    learn: counts.learn / total,
-  };
+  return Object.fromEntries(
+    HABIT_CATEGORY_KEYS.map((k) => [k, counts[k] / total])
+  );
 }
 
 function trendLabelFromAvgs(recent, prev, habitCount) {

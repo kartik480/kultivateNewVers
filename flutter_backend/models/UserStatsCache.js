@@ -28,6 +28,12 @@ const UserStatsCacheSchema = new mongoose.Schema(
         move: { type: Number, default: 0 },
         mind: { type: Number, default: 0 },
         learn: { type: Number, default: 0 },
+        gym: { type: Number, default: 0 },
+        nutrition: { type: Number, default: 0 },
+        sleep: { type: Number, default: 0 },
+        social: { type: Number, default: 0 },
+        creative: { type: Number, default: 0 },
+        other: { type: Number, default: 0 },
       },
       insightNudgeBody: { type: String, default: "" },
       /// Streak / habits / deep work tiles under the ring

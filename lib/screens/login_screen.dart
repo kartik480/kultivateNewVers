@@ -1,8 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:kultivate_new_ver/services/auth_service.dart';
 import 'package:kultivate_new_ver/services/habit_store.dart';
 import '../screens/home_screen.dart';
+
+TextStyle _loginGeo({
+  double fontSize = 14,
+  FontWeight fontWeight = FontWeight.w400,
+  Color color = Colors.white,
+  double height = 1.35,
+}) =>
+    GoogleFonts.geologica(
+      fontSize: fontSize,
+      fontWeight: fontWeight,
+      color: color,
+      height: height,
+    );
+
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -82,37 +97,34 @@ class _LoginScreenState extends State<LoginScreen> {
 
     SizedBox(height: 10),
     Text(
-    "Kultivate",
-    style: TextStyle(
-    fontSize: 30,
-    fontWeight: FontWeight.bold,
-    color: Colors.white,
-    ),
+    'Kultivate',
+    style: _loginGeo(fontSize: 30, fontWeight: FontWeight.w800, height: 1.15),
     ),
     Text(
-    "Build Better Habits",
-    style: TextStyle(
-    color: Colors.white70,
-    ),
+    'Build Better Habits',
+    style: _loginGeo(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.white70),
     ),
     ],
     ),
     ),
     const SizedBox(height: 40),
-    const Text(
-    "Welcome Back",
-    style: TextStyle(
-    fontSize: 24,
-    fontWeight: FontWeight.bold,
+    Center(
+    child: Text(
+    'Welcome Back',
+    textAlign: TextAlign.center,
+    style: GoogleFonts.clickerScript(
+    fontSize: 36,
     color: Colors.white,
-
+    height: 1.05,
+    ),
     ),
     ),
     const SizedBox(height: 6),
-    const Text(
-    "Sign in to continue your journey",
-    style: TextStyle(
-    color: Colors.white70,
+    Center(
+    child: Text(
+    'Sign in to continue your journey',
+    textAlign: TextAlign.center,
+    style: _loginGeo(fontSize: 15, fontWeight: FontWeight.w400, color: Colors.white70),
     ),
     ),
     const SizedBox(height: 25),
@@ -140,9 +152,9 @@ class _LoginScreenState extends State<LoginScreen> {
     value: false,
     onChanged: (value) {},
     ),
-    const Text(
-    "Remember my Habit!",
-    style: TextStyle(color: Colors.white),
+    Text(
+    'Remember my Habit!',
+    style: _loginGeo(fontSize: 14, fontWeight: FontWeight.w500),
     ),
     ],
     ),
@@ -150,10 +162,9 @@ class _LoginScreenState extends State<LoginScreen> {
     ),
     TextButton(
     onPressed: () {},
-    child: const Text(
-    "Forgot Your Habit??",
-    style: TextStyle(color: Colors.lightBlueAccent),
-
+    child: Text(
+    'Forgot Your Habit??',
+    style: _loginGeo(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.lightBlueAccent),
     ),
     ),
     const SizedBox(height: 10),
@@ -179,8 +190,8 @@ class _LoginScreenState extends State<LoginScreen> {
     await HabitStore.instance.applyLogin(email: emailController.text.trim());
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-    const SnackBar(
-    content: Text("Login Successful"),
+    SnackBar(
+    content: Text('Login Successful', style: _loginGeo(fontWeight: FontWeight.w500)),
     ),
     );
     Navigator.pushReplacement(
@@ -194,7 +205,7 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
     SnackBar(
-    content: Text(err),
+    content: Text(err, style: _loginGeo(fontWeight: FontWeight.w500)),
     ),
     );
     }
@@ -203,33 +214,29 @@ class _LoginScreenState extends State<LoginScreen> {
     backgroundColor: Colors.transparent,
     shadowColor: Colors.transparent,
     ),
-    child: const Text(
-    "Login on-Habit on",
-    style: TextStyle(
-    fontSize: 16,
-    fontWeight: FontWeight.bold,
-    color: Colors.white,
-    ),
+    child: Text(
+    'Login on-Habit on',
+    style: _loginGeo(fontSize: 16, fontWeight: FontWeight.w700, height: 1.2),
     ),
     ),
     ),
     const SizedBox(height: 25),
     Row(
-    children: const[
-    Expanded(
+    children: [
+    const Expanded(
     child: Divider(
     color: Colors.white24,
     ),
     ),
     Padding(
     padding:
-    EdgeInsets.symmetric(horizontal: 10),
+    const EdgeInsets.symmetric(horizontal: 10),
     child: Text(
-    "or continue with",
-    style: TextStyle(color: Colors.white70),
+    'or continue with',
+    style: _loginGeo(fontSize: 13, fontWeight: FontWeight.w400, color: Colors.white70),
     ),
     ),
-    Expanded(
+    const Expanded(
     child: Divider(
     color: Colors.white24,
     ),
@@ -257,14 +264,11 @@ class _LoginScreenState extends State<LoginScreen> {
     child: RichText(
     text: TextSpan(
     text: "Don't have an account? ",
-    style: const TextStyle(color: Colors.white),
+    style: _loginGeo(fontSize: 14, fontWeight: FontWeight.w400),
     children: [
     TextSpan(
-    text: "Sign Up",
-    style: TextStyle(
-    color: Colors.lightBlueAccent,
-    fontWeight: FontWeight.bold,
-    ),
+    text: 'Sign Up',
+    style: _loginGeo(fontSize: 14, fontWeight: FontWeight.w700, color: Colors.lightBlueAccent),
     recognizer: TapGestureRecognizer()
     ..onTap = (){
     _pageController.animateToPage(
@@ -288,13 +292,9 @@ class _LoginScreenState extends State<LoginScreen> {
     return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            "Create your Habit..!",
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-              color: Colors.white,
-            ),
+          Text(
+            'Create your Habit..!',
+            style: _loginGeo(fontSize: 24, fontWeight: FontWeight.w800, height: 1.2),
           ),
           const SizedBox(height: 25),
           _buildTextField(
@@ -337,8 +337,8 @@ class _LoginScreenState extends State<LoginScreen> {
                   email: signUpEmailController.text.trim(),
                 );
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text("Register successful"),
+                  SnackBar(
+                    content: Text('Register successful', style: _loginGeo(fontWeight: FontWeight.w500)),
                   ),
                 );
                 _pageController.animateToPage(
@@ -348,17 +348,13 @@ class _LoginScreenState extends State<LoginScreen> {
                 );
               } else {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(err)),
+                  SnackBar(content: Text(err, style: _loginGeo(fontWeight: FontWeight.w500))),
                 );
               }
             },
-            child: const Text(
-              "create habit",
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-              ),
+            child: Text(
+              'create habit',
+              style: _loginGeo(fontSize: 16, fontWeight: FontWeight.w700, height: 1.2),
             ),
           ),
           const SizedBox(height: 25),
@@ -372,12 +368,9 @@ class _LoginScreenState extends State<LoginScreen> {
                       curve: Curves.easeInOut,
                     );
                   },
-                  child: const Text(
-                    "Already have an Habit? Login",
-                    style: TextStyle(
-                      color: Colors.lightBlueAccent,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  child: Text(
+                    'Already have an Habit? Login',
+                    style: _loginGeo(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.lightBlueAccent),
                   )
               )
           )
@@ -400,11 +393,11 @@ class _LoginScreenState extends State<LoginScreen> {
       child: TextField(
         controller: controller,
         obscureText: isPassword,
-        style: const TextStyle(color: Colors.white),
+        style: _loginGeo(fontSize: 16, fontWeight: FontWeight.w400),
 
         decoration: InputDecoration(
           hintText: hint,
-          hintStyle: const TextStyle(color: Colors.white54),
+          hintStyle: _loginGeo(fontSize: 16, fontWeight: FontWeight.w400, color: Colors.white54),
           prefixIcon: Icon(icon, color: Colors.white54),
           border: InputBorder.none,
           contentPadding: const EdgeInsets.symmetric(vertical: 18),

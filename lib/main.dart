@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:kultivate_new_ver/screens/login_screen.dart';
+import 'package:kultivate_new_ver/screens/splash_screen.dart';
 import 'package:kultivate_new_ver/theme/kultivate_theme.dart';
 
 void main() {
@@ -13,7 +13,7 @@ class KultivateApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       theme: KultivateTheme.dark(),
-      home: const LoginScreen(),
+      home: const SplashScreen(),
     );
   }
 }

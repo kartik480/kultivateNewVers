@@ -1,6 +1,23 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const Habit = require("../models/Habit");
+
+function normalizeFrequency(f) {
+  if (typeof f !== "string") return "daily";
+  const t = f.trim().toLowerCase();
+  if (t === "weekdays" || t === "weekly") return t;
+  return "daily";
+}
+
+function habitToClient(h) {
+  return {
+    id: h._id.toString(),
+    title: h.title,
+    category: h.category,
+    notes: h.notes && String(h.notes).trim() ? String(h.notes).trim() : null,
+    frequency: h.frequency || "daily",
+  };
+}
 const HabitCompletion = require("../models/HabitCompletion");
 const {
   refreshStatsAndRollupsAfterToggle,
@@ -22,11 +39,7 @@ function buildStatePayload(userId) {
           compByHabit[hid].push(c.day);
         }
         return {
-          habits: habits.map((h) => ({
-            id: h._id.toString(),
-            title: h.title,
-            category: h.category,
-          })),
+          habits: habits.map((h) => habitToClient(h)),
           completions: compByHabit,
         };
       })
@@ -59,10 +72,13 @@ router.post("/bootstrap", async (req, res) => {
     const idMap = {};
     for (const h of habitList) {
       if (!h.title || !h.category) continue;
+      const notesRaw = h.notes != null ? String(h.notes).trim() : "";
       const doc = await Habit.create({
         userId: req.userId,
         title: String(h.title).trim(),
         category: String(h.category),
+        notes: notesRaw,
+        frequency: normalizeFrequency(h.frequency),
       });
       const tempId = h.tempId != null ? String(h.tempId) : doc._id.toString();
       idMap[tempId] = doc._id;
@@ -98,28 +114,62 @@ router.post("/bootstrap", async (req, res) => {
 
 router.post("/", async (req, res) => {
   try {
-    const { title, category } = req.body;
+    const { title, category, notes, frequency } = req.body;
     if (typeof title !== "string" || typeof category !== "string") {
       return res.status(400).json({ message: "title and category required" });
     }
     const t = title.trim();
     if (!t) return res.status(400).json({ message: "title required" });
+    const notesStr =
+      typeof notes === "string" ? notes.trim() : notes != null ? String(notes).trim() : "";
     const h = await Habit.create({
       userId: req.userId,
       title: t,
       category: category.trim() || "focus",
+      notes: notesStr,
+      frequency: normalizeFrequency(frequency),
     });
     await recomputeUserStatsCache(req.userId);
     res.status(201).json({
-      habit: {
-        id: h._id.toString(),
-        title: h.title,
-        category: h.category,
-      },
+      habit: habitToClient(h),
     });
   } catch (e) {
     console.error(e);
     res.status(500).json({ message: "Failed to create habit" });
+  }
+});
+
+/// Partial update for habit form fields (notes, frequency, title, category).
+router.patch("/:habitId", async (req, res) => {
+  try {
+    const { habitId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(habitId)) {
+      return res.status(400).json({ message: "Invalid habit id" });
+    }
+    const habit = await Habit.findOne({ _id: habitId, userId: req.userId });
+    if (!habit) return res.status(404).json({ message: "Habit not found" });
+
+    const { title, category, notes, frequency, isArchived } = req.body;
+    if (typeof title === "string") {
+      const tt = title.trim();
+      if (tt) habit.title = tt;
+    }
+    if (typeof category === "string" && category.trim()) {
+      habit.category = category.trim();
+    }
+    if (notes !== undefined) {
+      if (notes === null) habit.notes = "";
+      else habit.notes = String(notes).trim();
+    }
+    if (frequency !== undefined) habit.frequency = normalizeFrequency(frequency);
+    if (typeof isArchived === "boolean") habit.isArchived = isArchived;
+
+    await habit.save();
+    await recomputeUserStatsCache(req.userId);
+    res.json({ habit: habitToClient(habit) });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "Failed to update habit" });
   }
 });
 

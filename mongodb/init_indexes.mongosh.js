@@ -42,8 +42,11 @@ for (const name of collectionNames) {
 db.users.createIndex({ email: 1 }, { unique: true, name: 'users_email_unique' });
 
 // --- habits ---
+// Document shape (Mongoose Habit): userId, title, category, notes (string), frequency (daily|weekdays|weekly),
+// isArchived (bool), createdAt, updatedAt
 db.habits.createIndex({ userId: 1, isArchived: 1 }, { name: 'habits_user_archived' });
 db.habits.createIndex({ userId: 1, createdAt: -1 }, { name: 'habits_user_created' });
+db.habits.createIndex({ userId: 1, category: 1 }, { name: 'habits_user_category' });
 
 // --- habit_completions (daily check-ins) ---
 db.habit_completions.createIndex(
