@@ -716,21 +716,44 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                 const SizedBox(height: 20),
 
                                 // statistical progressive bar
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text("Bond level", style: TextStyle(color: Colors.white70, fontSize: 14)),
-                                    const SizedBox(height: 8),
-                                    ClipRRect(
-                                      borderRadius:  BorderRadius.circular(10),
-                                      child: LinearProgressIndicator(
-                                        value: HabitStore.instance.companionBondProgress,
-                                        minHeight: 12,
-                                        backgroundColor: Colors.white10,
-                                        color: const Color(0xFF00D9FF),
-                                      ),
-                                    ),
-                                  ],
+                                ListenableBuilder(
+                                  listenable: HabitStore.instance,
+                                  builder: (context, _) {
+                                    final progressPct =
+                                        (HabitStore.instance.companionBondProgress * 100).round();
+                                    return Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            const Text(
+                                              "Bond level",
+                                              style: TextStyle(color: Colors.white70, fontSize: 14),
+                                            ),
+                                            const Spacer(),
+                                            Text(
+                                              '$progressPct%',
+                                              style: const TextStyle(
+                                                color: Color(0xFF00D9FF),
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 8),
+                                        ClipRRect(
+                                          borderRadius: BorderRadius.circular(10),
+                                          child: LinearProgressIndicator(
+                                            value: HabitStore.instance.companionBondProgress,
+                                            minHeight: 12,
+                                            backgroundColor: Colors.white10,
+                                            color: const Color(0xFF00D9FF),
+                                          ),
+                                        ),
+                                      ],
+                                    );
+                                  },
                                 ),
                                 const SizedBox(height: 25),
                                 _menuItem(
@@ -1505,58 +1528,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   List<Widget> _buildCompanionHomeSection(BuildContext context) {
     return [
-      Container(
-        width: double.infinity,
-        padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.06),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.white.withOpacity(0.1)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.pets_rounded, color: Color(0xFF00D9FF), size: 22),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'My companion',
-                    style: TextStyle(
-                      color: Colors.white.withOpacity(0.92),
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Text(
-              'Your companion gets closer as you keep habits — raise bond with steady check-ins.',
-              style: TextStyle(
-                color: Colors.white.withOpacity(0.62),
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
-      ),
-      const SizedBox(height: 16),
-      Center(
-        child: _buildCompanionVideoFrame(
-          showLiveVideo: _navBarHeight <= 250,
-        ),
-      ),
-      const SizedBox(height: 16),
       ListenableBuilder(
         listenable: HabitStore.instance,
         builder: (context, _) => Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Bond level', style: TextStyle(color: Colors.white70, fontSize: 14)),
+            Row(
+              children: [
+                const Text('Bond level', style: TextStyle(color: Colors.white70, fontSize: 14)),
+                const Spacer(),
+                Text(
+                  '${(HabitStore.instance.companionBondProgress * 100).round()}%',
+                  style: const TextStyle(
+                    color: Color(0xFF00D9FF),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 8),
             ClipRRect(
               borderRadius: BorderRadius.circular(10),
@@ -2366,92 +2356,99 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildGamificationSection() {
-    final s = HabitStore.instance;
-    final pts = s.totalPoints;
-    final lvl = s.level;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.06),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white.withOpacity(0.12)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            "Your progress",
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-            ),
+    return ListenableBuilder(
+      listenable: HabitStore.instance,
+      builder: (context, _) {
+        final s = HabitStore.instance;
+        final pts = s.totalPoints;
+        final lvl = s.level;
+        final activeHabits = s.habits.length;
+        final totalCheckIns = s.totalCompletions;
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.06),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: Colors.white.withOpacity(0.12)),
           ),
-          const SizedBox(height: 4),
-          Text(
-            "Points & level from habits you complete (saved on device).",
-            style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12),
-          ),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.05),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: const Color(0xFF00D9FF).withOpacity(0.2),
-                  ),
-                  child: const Icon(Icons.person, size: 20, color: Color(0xFF00D9FF)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "Your progress",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        s.displayName,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${s.habits.length} active habit${s.habits.length == 1 ? '' : 's'} · ${s.totalCompletions} total check-ins',
-                        style: const TextStyle(color: Colors.white60, fontSize: 12),
-                      ),
-                    ],
-                  ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                "Points & level from your latest check-ins.",
+                style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(14),
                 ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+                child: Row(
                   children: [
-                    Text(
-                      '$pts pts',
-                      style: const TextStyle(
-                        color: Color(0xFF00D9FF),
-                        fontWeight: FontWeight.bold,
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: const Color(0xFF00D9FF).withOpacity(0.2),
+                      ),
+                      child: const Icon(Icons.person, size: 20, color: Color(0xFF00D9FF)),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            s.displayName,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '$activeHabits active habit${activeHabits == 1 ? '' : 's'} · $totalCheckIns total check-ins',
+                            style: const TextStyle(color: Colors.white60, fontSize: 12),
+                          ),
+                        ],
                       ),
                     ),
-                    Text(
-                      'Level $lvl',
-                      style: const TextStyle(color: Colors.white70, fontSize: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          '$pts pts',
+                          style: const TextStyle(
+                            color: Color(0xFF00D9FF),
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          'Level $lvl',
+                          style: const TextStyle(color: Colors.white70, fontSize: 12),
+                        ),
+                      ],
                     ),
                   ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -3071,11 +3068,9 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
   @override
   Widget build(BuildContext context) {
     final s = HabitStore.instance;
-    final score = s.focusScore();
+    final score = (s.todayProgressFraction * 100).round();
     final ringProgress = (score / 100.0).clamp(0.0, 1.0);
-    final fm = s.estimatedFocusMinutesToday;
-    final deepVal = fm <= 0 ? '0' : (fm < 60 ? '$fm' : (fm / 60).toStringAsFixed(fm >= 600 ? 0 : 1));
-    final deepUnit = fm >= 60 ? 'h' : 'm';
+    final completedToday = s.completedTodayCount;
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
@@ -3212,7 +3207,7 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                'FOCUS SCORE',
+                                'TODAY COMPLETION',
                                 style: TextStyle(
                                   color: Colors.white.withOpacity(0.45),
                                   fontSize: 10,
@@ -3239,9 +3234,9 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
                 children: [
                   Expanded(child: _statGlassTile('Streak', '${s.currentStreak}', 'days', Icons.local_fire_department)),
                   const SizedBox(width: 10),
-                  Expanded(child: _statGlassTile('Habits', '${s.habits.length}', 'active', Icons.check_circle_outline)),
+                  Expanded(child: _statGlassTile('Done today', '$completedToday', 'hits', Icons.check_circle_outline)),
                   const SizedBox(width: 10),
-                  Expanded(child: _statGlassTile('Deep work', deepVal, deepUnit, Icons.hourglass_top)),
+                  Expanded(child: _statGlassTile('Check-ins', '${s.totalCompletions}', 'all', Icons.hourglass_top)),
                 ],
               ),
               const SizedBox(height: 22),
@@ -3331,10 +3326,36 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
     );
   }
 
+  String _weekdayCompact(int weekday) {
+    switch (weekday) {
+      case DateTime.monday:
+        return 'M';
+      case DateTime.tuesday:
+        return 'T';
+      case DateTime.wednesday:
+        return 'W';
+      case DateTime.thursday:
+        return 'Th';
+      case DateTime.friday:
+        return 'F';
+      case DateTime.saturday:
+        return 'Sa';
+      case DateTime.sunday:
+        return 'Su';
+      default:
+        return '-';
+    }
+  }
+
   Widget _momentumStrip() {
-    const labels = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-    final values = HabitStore.instance.last7DayIntensity();
-    final avgPct = (HabitStore.instance.avgDailyCompletionLast7 * 100).round();
+    final counts = HabitStore.instance.last7DayCheckinCounts();
+    final maxCount = counts.fold<int>(0, (m, v) => v > m ? v : m);
+    final avgPerDay = counts.isEmpty ? 0.0 : counts.reduce((a, b) => a + b) / counts.length;
+    final today = DateTime.now();
+    final labels = List<String>.generate(7, (i) {
+      final d = today.subtract(Duration(days: 6 - i));
+      return _weekdayCompact(d.weekday);
+    });
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -3349,14 +3370,18 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text('Daily completion', style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 11)),
-              Text('avg $avgPct%', style: TextStyle(color: _mint.withOpacity(0.9), fontSize: 11, fontWeight: FontWeight.w700)),
+              Text(
+                'avg ${avgPerDay.toStringAsFixed(avgPerDay >= 10 ? 0 : 1)} check-ins/day',
+                style: TextStyle(color: _mint.withOpacity(0.9), fontSize: 11, fontWeight: FontWeight.w700),
+              ),
             ],
           ),
           const SizedBox(height: 12),
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: List.generate(7, (i) {
-              final h = math.max(6.0, 56.0 * values[i]);
+              final normalized = maxCount == 0 ? 0.0 : (counts[i] / maxCount).clamp(0.0, 1.0);
+              final h = counts[i] == 0 ? 2.0 : math.max(8.0, 56.0 * normalized);
               return Expanded(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 3),
@@ -3371,8 +3396,8 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
                             begin: Alignment.bottomCenter,
                             end: Alignment.topCenter,
                             colors: [
-                              _violet.withOpacity(0.25 + 0.35 * values[i]),
-                              _mint.withOpacity(0.45 + 0.35 * values[i]),
+                              _violet.withOpacity(0.25 + 0.35 * normalized),
+                              _mint.withOpacity(0.45 + 0.35 * normalized),
                             ],
                           ),
                           boxShadow: [BoxShadow(color: _mint.withOpacity(0.15), blurRadius: 8, offset: const Offset(0, 2))],
@@ -3393,12 +3418,13 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
 
   Widget _heatWeekRow() {
     // 0 = little done (bright green) → 1 = a lot done (bright red)
-    final intensities = HabitStore.instance.last7DayIntensity();
+    final counts = HabitStore.instance.last7DayCheckinCounts();
+    final maxCount = counts.fold<int>(0, (m, v) => v > m ? v : m);
     const brightGreen = Color(0xFF00FF88);
     const brightRed = Color(0xFFFF3355);
     return Row(
       children: List.generate(7, (i) {
-        final t = i < intensities.length ? intensities[i] : 0.0;
+        final t = maxCount == 0 ? 0.0 : (counts[i] / maxCount).clamp(0.0, 1.0);
         final hub = Color.lerp(brightGreen, brightRed, t)!;
         final glow = 0.35 + 0.55 * t;
         return Expanded(
@@ -3429,7 +3455,7 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
   }
 
   Widget _categorySplit() {
-    final fr = HabitStore.instance.categoryFractions();
+    final fr = HabitStore.instance.categoryCompletionFractionsLast7();
     final items = <(String, IconData, double, Color)>[
       ('Focus', Icons.center_focus_strong, fr['focus'] ?? 0, const Color(0xFF5DFFC4)),
       ('Move', Icons.directions_run, fr['move'] ?? 0, const Color(0xFF7AB6FF)),
@@ -3440,10 +3466,19 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
       ('Sleep', Icons.bedtime_outlined, fr['sleep'] ?? 0, const Color(0xFFB388FF)),
       ('Social', Icons.groups_outlined, fr['social'] ?? 0, const Color(0xFFFFAB40)),
       ('Creative', Icons.palette_outlined, fr['creative'] ?? 0, const Color(0xFFFF7AD9)),
-      ('Other', Icons.category_outlined, fr['other'] ?? 0, const Color(0xFF9E9E9E)),
     ];
     return Column(
       children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Text(
+              'Based on last 7 days of check-ins',
+              style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 11),
+            ),
+          ),
+        ),
         for (final (name, icon, pct, col) in items)
           Padding(
             padding: const EdgeInsets.only(bottom: 10),
@@ -3734,7 +3769,7 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
             ),
             ListView(
               controller: widget.scrollController,
-              padding: const EdgeInsets.fromLTRB(16, 18, 16, 32),
+              padding: const EdgeInsets.fromLTRB(16, 34, 16, 32),
               children: [
                 Center(
                   child: Container(

@@ -371,6 +371,8 @@ class HabitStore extends ChangeNotifier {
     return done / habits.length;
   }
 
+  int get completedTodayCount => countCompletedOn(DateTime.now());
+
   /// Rough focus minutes from completed habits today (25 min each).
   int get estimatedFocusMinutesToday {
     return countCompletedOn(DateTime.now()) * 25;
@@ -386,6 +388,17 @@ class HabitStore extends ChangeNotifier {
         continue;
       }
       out.add((countCompletedOn(d) / habits.length).clamp(0.0, 1.0));
+    }
+    return out;
+  }
+
+  /// Raw check-ins per day for the last 7 days, oldest -> newest.
+  List<int> last7DayCheckinCounts() {
+    final out = <int>[];
+    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    for (var i = 6; i >= 0; i--) {
+      final d = today.subtract(Duration(days: i));
+      out.add(countCompletedOn(d));
     }
     return out;
   }
@@ -415,6 +428,48 @@ class HabitStore extends ChangeNotifier {
       counts[c] = (counts[c] ?? 0) + 1;
     }
     final total = habits.length;
+    return {for (final k in keys) k: (counts[k] ?? 0) / total};
+  }
+
+  /// Share of check-ins by category (across all recorded completions).
+  Map<String, double> categoryCompletionFractions() {
+    const keys = habitCategoryKeys;
+    final counts = <String, int>{for (final k in keys) k: 0};
+    var total = 0;
+    for (final h in habits) {
+      final c = keys.contains(h.category) ? h.category : 'other';
+      final n = _completionsByHabit[h.id]?.length ?? 0;
+      counts[c] = (counts[c] ?? 0) + n;
+      total += n;
+    }
+    if (total == 0) {
+      return {for (final k in keys) k: 0.0};
+    }
+    return {for (final k in keys) k: (counts[k] ?? 0) / total};
+  }
+
+  /// Share of check-ins by category for the trailing 7 days.
+  Map<String, double> categoryCompletionFractionsLast7() {
+    const keys = habitCategoryKeys;
+    final counts = <String, int>{for (final k in keys) k: 0};
+    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    final startKey = _dateKey(today.subtract(const Duration(days: 6)));
+    final endKey = _dateKey(today);
+    var total = 0;
+    for (final h in habits) {
+      final c = keys.contains(h.category) ? h.category : 'other';
+      final set = _completionsByHabit[h.id];
+      if (set == null || set.isEmpty) continue;
+      for (final k in set) {
+        if (k.compareTo(startKey) >= 0 && k.compareTo(endKey) <= 0) {
+          counts[c] = (counts[c] ?? 0) + 1;
+          total++;
+        }
+      }
+    }
+    if (total == 0) {
+      return {for (final k in keys) k: 0.0};
+    }
     return {for (final k in keys) k: (counts[k] ?? 0) / total};
   }
 
