@@ -35,15 +35,23 @@ class AuthService {
   }) async {
     final url = Uri.parse("$baseurl/register");
     debugPrint("sending request to: $url");
-    final response = await http.post(
-      url,
-      headers: const {"content-type": "application/json"},
-      body: jsonEncode({
-        "name": name,
-        "email": email,
-        "password": password,
-      }),
-    );
+    http.Response response;
+    try {
+      response = await http
+          .post(
+            url,
+            headers: const {"content-type": "application/json"},
+            body: jsonEncode({
+              "name": name,
+              "email": email,
+              "password": password,
+            }),
+          )
+          .timeout(const Duration(seconds: 20));
+    } catch (e) {
+      debugPrint('register request failed: $e');
+      return 'Unable to reach server. Check internet/API URL and try again.';
+    }
     debugPrint("status code: ${response.statusCode}");
     debugPrint("response body: ${response.body}");
 
@@ -74,14 +82,22 @@ class AuthService {
     required String password,
   }) async {
     final url = Uri.parse("$baseurl/login");
-    final response = await http.post(
-      url,
-      headers: const {"content-type": "application/json"},
-      body: jsonEncode({
-        "email": email,
-        "password": password,
-      }),
-    );
+    http.Response response;
+    try {
+      response = await http
+          .post(
+            url,
+            headers: const {"content-type": "application/json"},
+            body: jsonEncode({
+              "email": email,
+              "password": password,
+            }),
+          )
+          .timeout(const Duration(seconds: 20));
+    } catch (e) {
+      debugPrint('login request failed: $e');
+      return 'Unable to reach server. Check internet/API URL and try again.';
+    }
     if (response.statusCode == 200) {
       try {
         final map = jsonDecode(response.body) as Map<String, dynamic>;
