@@ -6,9 +6,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 class AuthService {
   static const _kJwt = 'auth_jwt';
   static const _apiBaseFromDefine = String.fromEnvironment('API_BASE_URL');
+  static const _prodApiBase = 'https://kultivatenewvers.onrender.com';
 
   static String get baseurl {
     if (_apiBaseFromDefine.isNotEmpty) return _apiBaseFromDefine;
+    if (kReleaseMode) return _prodApiBase;
     if (kIsWeb) return "http://localhost:5000";
     return "http://10.0.2.2:5000";
   }
