@@ -355,15 +355,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final maxH = screenH;
     final vy = details.velocity.pixelsPerSecond.dy;
     setState(() {
-      if (vy > 500) {
+      // Flick open / closed (lower threshold so slow drags still register).
+      if (vy > 280) {
         _navBarHeight = maxH;
-      } else if (vy < -500) {
-        _navBarHeight = _minHeight;
-      } else if (_navBarHeight > screenH * 0.25) {
-        _navBarHeight = maxH;
-      } else {
-        _navBarHeight = _minHeight;
+        return;
       }
+      if (vy < -280) {
+        _navBarHeight = _minHeight;
+        return;
+      }
+      // No strong flick: snap to whichever height is closer (avoids “stuck”
+      // between min and a tiny drag that used to always snap closed).
+      final distMin = (_navBarHeight - _minHeight).abs();
+      final distMax = (_navBarHeight - maxH).abs();
+      _navBarHeight = distMin < distMax ? _minHeight : maxH;
     });
   }
 
@@ -547,6 +552,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             child: Opacity(
               opacity: _calculateOpacity(maxHeight),
               child: SingleChildScrollView(
+                primary: false,
+                physics: const AlwaysScrollableScrollPhysics(
+                  parent: BouncingScrollPhysics(),
+                ),
                 padding: const EdgeInsets.only(top: 170, left: 16, right: 16, bottom: 150),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -653,12 +662,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
           if (_navBarHeight > _minHeight)
             Positioned.fill(
-              child: BackdropFilter(
-                filter: ImageFilter.blur(
-                  sigmaX: (1.0 - _calculateOpacity(maxHeight)) * 15,
-                  sigmaY: (1.0 - _calculateOpacity(maxHeight)) * 15,
+              child: IgnorePointer(
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(
+                    sigmaX: (1.0 - _calculateOpacity(maxHeight)) * 15,
+                    sigmaY: (1.0 - _calculateOpacity(maxHeight)) * 15,
+                  ),
+                  child: Container(color: Colors.black.withOpacity(0.2 * (1.0 - _calculateOpacity(maxHeight)))),
                 ),
-                child: Container(color: Colors.black.withOpacity(0.2 * (1.0 - _calculateOpacity(maxHeight)))),
               ),
             ),
 
@@ -813,20 +824,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           behavior: HitTestBehavior.translucent,
                           onVerticalDragUpdate: _onPanelVerticalDragUpdate,
                           onVerticalDragEnd: _onPanelVerticalDragEnd,
-                          onTap: () {
-                            setState(() {
-                              _navBarHeight = _navBarHeight > screenHeight * 0.25 ? _minHeight : maxHeight;
-                            });
-                          },
                           child: SizedBox(
-                            height: 40,
+                            height: 52,
                             width: double.infinity,
                             child: Align(
                               alignment: Alignment.topCenter,
                               child: Container(
                                 height: 5,
-                                width: 65,
-                                margin: const EdgeInsets.only(top: 6),
+                                width: 72,
+                                margin: const EdgeInsets.only(top: 10),
                                 decoration: BoxDecoration(
                                   color: const Color(0xFF00D9FF),
                                   borderRadius: BorderRadius.circular(50),
@@ -966,7 +972,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             child: PageView.builder(
               controller: _statsPageController,
               itemCount: _statsPageCount,
-              physics: const BouncingScrollPhysics(parent: PageScrollPhysics()),
+              physics: const PageScrollPhysics(),
               padEnds: false,
               onPageChanged: (i) {
                 setState(() => _statsPageIndex = i);
