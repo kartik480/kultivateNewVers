@@ -2487,31 +2487,33 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return [_habitGrid(context, store.habits)];
   }
 
+  /// Habit list on the home panel — full-width row cards (not a grid).
   Widget _habitGrid(BuildContext context, List<Habit> habits) {
-    return GridView.builder(
+    return ListView.separated(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       itemCount: habits.length,
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        crossAxisSpacing: 14,
-        mainAxisSpacing: 14,
-        childAspectRatio: 1.75,
-      ),
+      separatorBuilder: (_, __) => const SizedBox(height: 14),
       itemBuilder: (context, index) => _habitTile(context, habits[index]),
     );
   }
+
+  static const Color _kHabitCardTeal = Color(0xFF2DD4BF);
 
   Widget _habitTile(BuildContext context, Habit h) {
     final store = HabitStore.instance;
     final done = store.isCompletedOn(h.id, DateTime.now());
     final streak = store.habitStreak(h.id);
     final icon = _iconForHabitCategory(h.category);
-    final accent = _accentForHabitCategory(h.category);
+    final categoryTint = _accentForHabitCategory(h.category);
+    const radius = 22.0;
+    const pad = 18.0;
+    const stripeW = 14.0;
+
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(radius),
         onTap: () => store.toggleCompleteToday(h.id),
         onLongPress: () async {
           final ok = await showDialog<bool>(
@@ -2530,104 +2532,176 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         },
         child: Container(
           decoration: BoxDecoration(
-            color: const Color(0xFF131734),
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: done
-                ? [
-                    BoxShadow(
-                      color: accent.withOpacity(0.22),
-                      blurRadius: 24,
-                      spreadRadius: 1.2,
-                      offset: const Offset(0, 6),
-                    ),
-                    BoxShadow(
-                      color: accent.withOpacity(0.08),
-                      blurRadius: 48,
-                      spreadRadius: 3,
-                    ),
-                  ]
-                : null,
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 9),
-            child: Container(
-              decoration: BoxDecoration(
-                color: const Color(0xFF1B1F42),
-                borderRadius: BorderRadius.circular(22),
-                border: done
-                    ? Border.all(color: accent.withOpacity(0.34), width: 1.1)
-                    : null,
+            borderRadius: BorderRadius.circular(radius),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.45),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+                spreadRadius: -4,
               ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 7,
-                    margin: const EdgeInsets.only(left: 5, top: 10, bottom: 10),
-                    decoration: BoxDecoration(
-                      color: accent,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Container(
-                    width: 46,
-                    height: 46,
-                    decoration: BoxDecoration(
-                      color: accent.withOpacity(0.18),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Icon(icon, color: accent, size: 24),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          h.title,
-                          style: GoogleFonts.geologica(
-                            color: Colors.white,
-                            fontSize: 17,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.1,
+              if (done)
+                BoxShadow(
+                  color: _kHabitCardTeal.withOpacity(0.22),
+                  blurRadius: 18,
+                  offset: const Offset(0, 6),
+                  spreadRadius: -2,
+                ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(radius),
+            child: Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Color(0xFF0F1628),
+                    Color(0xFF121C32),
+                    Color(0xFF152A45),
+                  ],
+                  stops: [0.0, 0.45, 1.0],
+                ),
+              ),
+              child: IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 16, 8, 16),
+                      child: Container(
+                        width: stripeW,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(stripeW / 2),
+                          gradient: const LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Color(0xFF5EEAD4),
+                              Color(0xFF2DD4BF),
+                              Color(0xFF14B8A6),
+                            ],
                           ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                          boxShadow: [
+                            BoxShadow(
+                              color: _kHabitCardTeal.withOpacity(0.42),
+                              blurRadius: 14,
+                              spreadRadius: -2,
+                              offset: const Offset(2, 0),
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 5),
-                        Text(
-                          'Streak: $streak days',
-                          style: GoogleFonts.geologica(
-                            color: Colors.white.withOpacity(0.72),
-                            fontSize: 12.2,
-                            fontWeight: FontWeight.w600,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.only(right: 12),
-                    child: Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: accent,
-                          width: 3.6,
-                        ),
-                        color: done ? accent.withOpacity(0.92) : Colors.transparent,
                       ),
-                      child: done
-                          ? const Icon(Icons.check_rounded, color: Colors.white, size: 22)
-                          : null,
                     ),
-                  ),
-                ],
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(pad, pad, 14, pad),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 68,
+                              height: 68,
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: [
+                                    _kHabitCardTeal.withOpacity(0.28),
+                                    categoryTint.withOpacity(0.16),
+                                    const Color(0xFF0D2830).withOpacity(0.85),
+                                  ],
+                                ),
+                                borderRadius: BorderRadius.circular(18),
+                                border: Border.all(
+                                  color: Color.lerp(_kHabitCardTeal, categoryTint, 0.25)!
+                                      .withOpacity(0.72),
+                                  width: 1.75,
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: _kHabitCardTeal.withOpacity(0.22),
+                                    blurRadius: 16,
+                                    offset: const Offset(0, 5),
+                                  ),
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.35),
+                                    blurRadius: 10,
+                                    offset: const Offset(0, 3),
+                                  ),
+                                ],
+                              ),
+                              child: Icon(
+                                icon,
+                                color: Color.lerp(Colors.white, categoryTint, 0.15),
+                                size: 32,
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    h.title,
+                                    style: GoogleFonts.inter(
+                                      color: Colors.white,
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.w700,
+                                      height: 1.2,
+                                      letterSpacing: -0.2,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Streak: $streak days',
+                                    style: GoogleFonts.inter(
+                                      color: Colors.white.withOpacity(0.48),
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                      height: 1.2,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Container(
+                              width: 48,
+                              height: 48,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: done ? _kHabitCardTeal : Colors.transparent,
+                                border: Border.all(
+                                  color: _kHabitCardTeal,
+                                  width: 2.5,
+                                ),
+                                boxShadow: done
+                                    ? [
+                                        BoxShadow(
+                                          color: _kHabitCardTeal.withOpacity(0.45),
+                                          blurRadius: 12,
+                                          spreadRadius: 0,
+                                        ),
+                                      ]
+                                    : null,
+                              ),
+                              child: done
+                                  ? const Icon(Icons.check_rounded, color: Colors.white, size: 26)
+                                  : null,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
