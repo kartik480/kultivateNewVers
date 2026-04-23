@@ -830,8 +830,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             child: Align(
                               alignment: Alignment.topCenter,
                               child: Container(
-                                height: 5,
-                                width: 72,
+                                height: 9,
+                                width: 112,
                                 margin: const EdgeInsets.only(top: 10),
                                 decoration: BoxDecoration(
                                   color: const Color(0xFF00D9FF),
@@ -972,6 +972,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             child: PageView.builder(
               controller: _statsPageController,
               itemCount: _statsPageCount,
+              // Default drag start so vertical drags can still drive the outer
+              // [SingleChildScrollView] when the gesture begins on the carousel.
               physics: const PageScrollPhysics(),
               padEnds: false,
               onPageChanged: (i) {
@@ -1176,7 +1178,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               child: SizedBox(
                                 width: _companionLensController.value.size.width,
                                 height: _companionLensController.value.size.height,
-                                child: VideoPlayer(_companionLensController),
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    Positioned.fill(
+                                      child: IgnorePointer(
+                                        ignoring: true,
+                                        child: VideoPlayer(_companionLensController),
+                                      ),
+                                    ),
+                                    Positioned.fill(
+                                      child: Listener(
+                                        behavior: HitTestBehavior.translucent,
+                                        child: const SizedBox.expand(),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             );
                           },
@@ -2347,7 +2365,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     : _babyDragonController.value.isInitialized
                         ? AspectRatio(
                             aspectRatio: _babyDragonController.value.aspectRatio,
-                            child: VideoPlayer(_babyDragonController),
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                Positioned.fill(
+                                  child: IgnorePointer(
+                                    ignoring: true,
+                                    child: VideoPlayer(_babyDragonController),
+                                  ),
+                                ),
+                                // Opaque to hit-testing so the parent scroll view receives drags
+                                // (IgnorePointer on the texture alone can leave "nothing" to hit).
+                                Positioned.fill(
+                                  child: Listener(
+                                    behavior: HitTestBehavior.translucent,
+                                    child: const SizedBox.expand(),
+                                  ),
+                                ),
+                              ],
+                            ),
                           )
                         : const Center(
                             child: CircularProgressIndicator(
@@ -2580,23 +2616,28 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         width: stripeW,
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(stripeW / 2),
-                          gradient: const LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              Color(0xFF5EEAD4),
-                              Color(0xFF2DD4BF),
-                              Color(0xFF14B8A6),
-                            ],
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: _kHabitCardTeal.withOpacity(0.42),
-                              blurRadius: 14,
-                              spreadRadius: -2,
-                              offset: const Offset(2, 0),
-                            ),
-                          ],
+                          color: done ? null : const Color(0xFF05070C),
+                          gradient: done
+                              ? LinearGradient(
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
+                                  colors: [
+                                    Color.lerp(categoryTint, Colors.white, 0.42)!,
+                                    categoryTint,
+                                    Color.lerp(categoryTint, Colors.black, 0.38)!,
+                                  ],
+                                )
+                              : null,
+                          boxShadow: done
+                              ? [
+                                  BoxShadow(
+                                    color: categoryTint.withOpacity(0.42),
+                                    blurRadius: 14,
+                                    spreadRadius: -2,
+                                    offset: const Offset(2, 0),
+                                  ),
+                                ]
+                              : null,
                         ),
                       ),
                     ),
@@ -2613,20 +2654,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                   begin: Alignment.topLeft,
                                   end: Alignment.bottomRight,
                                   colors: [
-                                    _kHabitCardTeal.withOpacity(0.28),
-                                    categoryTint.withOpacity(0.16),
+                                    categoryTint.withOpacity(0.32),
+                                    categoryTint.withOpacity(0.14),
                                     const Color(0xFF0D2830).withOpacity(0.85),
                                   ],
                                 ),
                                 borderRadius: BorderRadius.circular(18),
                                 border: Border.all(
-                                  color: Color.lerp(_kHabitCardTeal, categoryTint, 0.25)!
-                                      .withOpacity(0.72),
+                                  color: categoryTint.withOpacity(0.72),
                                   width: 1.75,
                                 ),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: _kHabitCardTeal.withOpacity(0.22),
+                                    color: categoryTint.withOpacity(0.28),
                                     blurRadius: 16,
                                     offset: const Offset(0, 5),
                                   ),
@@ -2683,15 +2723,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               alignment: Alignment.center,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
-                                color: done ? _kHabitCardTeal : Colors.transparent,
+                                color: done ? categoryTint : Colors.transparent,
                                 border: Border.all(
-                                  color: _kHabitCardTeal,
+                                  color: categoryTint,
                                   width: 2.5,
                                 ),
                                 boxShadow: done
                                     ? [
                                         BoxShadow(
-                                          color: _kHabitCardTeal.withOpacity(0.45),
+                                          color: categoryTint.withOpacity(0.45),
                                           blurRadius: 12,
                                           spreadRadius: 0,
                                         ),
@@ -5670,6 +5710,7 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
   Widget build(BuildContext context) {
     const cyan = Color(0xFF00D9FF);
     final presets = _activityPresetsForCategory(_category);
+    final activeCategoryAccent = _accentForHabitCategory(_category);
 
     return Container(
       decoration: const BoxDecoration(
@@ -5830,7 +5871,7 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
                               gradient: _category == id
                                   ? LinearGradient(
                                       colors: [
-                                        cyan.withOpacity(0.22),
+                                        _accentForHabitCategory(id).withOpacity(0.22),
                                         const Color(0xFF0F1023),
                                       ],
                                       begin: Alignment.topLeft,
@@ -5839,13 +5880,15 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
                                   : null,
                               color: _category == id ? null : const Color(0xFF0F1023),
                               border: Border.all(
-                                color: _category == id ? cyan : Colors.white.withOpacity(0.12),
+                                color: _category == id
+                                    ? _accentForHabitCategory(id)
+                                    : _accentForHabitCategory(id).withOpacity(0.38),
                                 width: _category == id ? 1.6 : 1,
                               ),
                               boxShadow: _category == id
                                   ? [
                                       BoxShadow(
-                                        color: cyan.withOpacity(0.18),
+                                        color: _accentForHabitCategory(id).withOpacity(0.22),
                                         blurRadius: 12,
                                         spreadRadius: 0,
                                       ),
@@ -5859,7 +5902,9 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
                                 Icon(
                                   _iconForHabitCategory(id),
                                   size: 22,
-                                  color: _category == id ? cyan : Colors.white54,
+                                  color: _category == id
+                                      ? _accentForHabitCategory(id)
+                                      : _accentForHabitCategory(id).withOpacity(0.72),
                                 ),
                                 const SizedBox(height: 6),
                                 Text(
@@ -5946,11 +5991,19 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
                   children: [
                     for (final (label, icon) in presets)
                       ActionChip(
-                        avatar: Icon(icon, size: 18, color: cyan),
+                        avatar: Icon(
+                          icon,
+                          size: 18,
+                          color: _accentForHabitCategory(_categoryForRadialLabel(label)),
+                        ),
                         label: Text(label),
                         labelStyle: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13),
-                        backgroundColor: const Color(0xFF0F1023),
-                        side: BorderSide(color: Colors.white.withOpacity(0.14)),
+                        backgroundColor: _accentForHabitCategory(_categoryForRadialLabel(label))
+                            .withOpacity(0.12),
+                        side: BorderSide(
+                          color: _accentForHabitCategory(_categoryForRadialLabel(label))
+                              .withOpacity(0.45),
+                        ),
                         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                         onPressed: () => _applyTemplate(label),
                       ),
@@ -5962,7 +6015,7 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
                   child: FilledButton(
                     onPressed: _canSubmit ? _submit : null,
                     style: FilledButton.styleFrom(
-                      backgroundColor: cyan,
+                      backgroundColor: activeCategoryAccent,
                       foregroundColor: Colors.white,
                       disabledBackgroundColor: Colors.white24,
                       padding: const EdgeInsets.symmetric(vertical: 16),
@@ -6252,6 +6305,7 @@ class _RadialActivityPickerOverlayState extends State<RadialActivityPickerOverla
                   final dx = math.cos(angle) * r;
                   final dy = math.sin(angle) * r;
                   final (String label, IconData icon) = _activities[i];
+                  final accent = _accentForHabitCategory(_categoryForRadialLabel(label));
                   return Positioned(
                     left: curHubX + dx - chipW / 2,
                     top: curHubY + dy - chipH / 2,
@@ -6262,6 +6316,7 @@ class _RadialActivityPickerOverlayState extends State<RadialActivityPickerOverla
                         child: _ActivityChip(
                           label: label,
                           icon: icon,
+                          accentColor: accent,
                           onTap: () async {
                             final category = _categoryForRadialLabel(label);
                             if (widget.onPresetChosen != null) {
@@ -6289,16 +6344,17 @@ class _ActivityChip extends StatelessWidget {
   const _ActivityChip({
     required this.label,
     required this.icon,
+    required this.accentColor,
     required this.onTap,
   });
 
   final String label;
   final IconData icon;
+  final Color accentColor;
   final Future<void> Function() onTap;
 
   @override
   Widget build(BuildContext context) {
-    const cyan = Color(0xFF00D9FF);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
@@ -6311,16 +6367,16 @@ class _ActivityChip extends StatelessWidget {
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: Colors.black.withOpacity(0.82),
-              border: Border.all(color: cyan.withOpacity(0.65), width: 1.75),
+              border: Border.all(color: accentColor.withOpacity(0.72), width: 1.75),
               boxShadow: [
                 BoxShadow(
-                  color: cyan.withOpacity(0.35),
+                  color: accentColor.withOpacity(0.38),
                   blurRadius: 12,
                   spreadRadius: 0,
                 ),
               ],
             ),
-            child: Icon(icon, size: 23, color: cyan),
+            child: Icon(icon, size: 23, color: accentColor),
           ),
           const SizedBox(height: 5),
           SizedBox(
@@ -6331,7 +6387,7 @@ class _ActivityChip extends StatelessWidget {
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                color: Colors.white.withOpacity(0.95),
+                color: Color.lerp(Colors.white, accentColor, 0.35)!.withOpacity(0.98),
                 fontWeight: FontWeight.w700,
                 fontSize: 10,
                 height: 1.12,
