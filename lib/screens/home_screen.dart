@@ -1,10 +1,15 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'dart:async';
+import 'dart:convert';
 import 'dart:ui';
 import 'dart:math' as math;
 import 'package:video_player/video_player.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:kultivate_new_ver/services/auth_service.dart';
 import 'package:kultivate_new_ver/services/habit_store.dart';
 
 String _categoryForRadialLabel(String label) {
@@ -125,6 +130,28 @@ class _ManualReminder {
   final TimeOfDay time;
   final DateTime createdAt;
   final String? note;
+
+  Map<String, dynamic> toJson() => {
+    'habitId': habitId,
+    'habitTitle': habitTitle,
+    'timeHour': time.hour,
+    'timeMinute': time.minute,
+    'createdAt': createdAt.toIso8601String(),
+    if (note != null && note!.trim().isNotEmpty) 'note': note!.trim(),
+  };
+
+  factory _ManualReminder.fromJson(Map<String, dynamic> j) {
+    return _ManualReminder(
+      habitId: (j['habitId'] ?? '').toString(),
+      habitTitle: (j['habitTitle'] ?? '').toString(),
+      time: TimeOfDay(
+        hour: (j['timeHour'] as num?)?.toInt() ?? 7,
+        minute: (j['timeMinute'] as num?)?.toInt() ?? 0,
+      ),
+      createdAt: DateTime.tryParse((j['createdAt'] ?? '').toString()) ?? DateTime.now(),
+      note: j['note']?.toString(),
+    );
+  }
 }
 
 class _ReminderHistoryEntry {
@@ -137,6 +164,20 @@ class _ReminderHistoryEntry {
   final String title;
   final String detail;
   final DateTime createdAt;
+
+  Map<String, dynamic> toJson() => {
+    'title': title,
+    'detail': detail,
+    'createdAt': createdAt.toIso8601String(),
+  };
+
+  factory _ReminderHistoryEntry.fromJson(Map<String, dynamic> j) {
+    return _ReminderHistoryEntry(
+      title: (j['title'] ?? '').toString(),
+      detail: (j['detail'] ?? '').toString(),
+      createdAt: DateTime.tryParse((j['createdAt'] ?? '').toString()) ?? DateTime.now(),
+    );
+  }
 }
 
 class HomeScreen extends StatefulWidget {
@@ -149,6 +190,8 @@ class HomeScreen extends StatefulWidget {
 // Added TickerProviderStateMixin for the wave animation
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   static const String _defaultCompanionAsset = 'companions/babydragon.mp4';
+  static const String _kManualReminders = 'manual_reminders_json';
+  static const String _kReminderHistory = 'manual_reminder_history_json';
   double _navBarHeight = 120.0;
   final double _minHeight = 120.0;
 
@@ -166,8 +209,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   String _activeCompanionAsset = _defaultCompanionAsset;
   bool _isSwitchingCompanionVideo = false;
   bool _wasCompanionsExpanded = false;
+  bool _isSocialTemporarilyLocked = true;
   Habit? _selectedManualReminderHabit;
   TimeOfDay _manualReminderTime = const TimeOfDay(hour: 7, minute: 0);
+  final TextEditingController _manualReminderHabitCtrl = TextEditingController();
   final TextEditingController _manualReminderNoteCtrl = TextEditingController();
   final List<_ManualReminder> _manualReminders = [];
   final List<_ReminderHistoryEntry> _reminderHistory = [];
@@ -212,6 +257,147 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   void _onHabitStoreChanged() {
     _refreshCompanionVideoForLevel();
+  }
+
+  Future<void> _loadRemindersState() async {
+    final p = await SharedPreferences.getInstance();
+    final remindersRaw = p.getString(_kManualReminders);
+    final historyRaw = p.getString(_kReminderHistory);
+
+    final loadedReminders = <_ManualReminder>[];
+    final loadedHistory = <_ReminderHistoryEntry>[];
+
+    if (remindersRaw != null && remindersRaw.isNotEmpty) {
+      try {
+        final list = jsonDecode(remindersRaw) as List<dynamic>;
+        loadedReminders.addAll(
+          list.map((e) => _ManualReminder.fromJson(e as Map<String, dynamic>)),
+        );
+      } catch (_) {}
+    }
+    if (historyRaw != null && historyRaw.isNotEmpty) {
+      try {
+        final list = jsonDecode(historyRaw) as List<dynamic>;
+        loadedHistory.addAll(
+          list.map((e) => _ReminderHistoryEntry.fromJson(e as Map<String, dynamic>)),
+        );
+      } catch (_) {}
+    }
+
+    if (mounted) {
+      setState(() {
+        _manualReminders
+          ..clear()
+          ..addAll(loadedReminders);
+        _reminderHistory
+          ..clear()
+          ..addAll(loadedHistory);
+      });
+    }
+
+    await _syncRemindersFromServer();
+  }
+
+  Future<void> _persistRemindersState() async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(
+      _kManualReminders,
+      jsonEncode(_manualReminders.map((r) => r.toJson()).toList()),
+    );
+    await p.setString(
+      _kReminderHistory,
+      jsonEncode(_reminderHistory.map((h) => h.toJson()).toList()),
+    );
+  }
+
+  Future<void> _syncRemindersFromServer() async {
+    final token = await AuthService.getToken();
+    if (token == null || token.isEmpty) return;
+    try {
+      final res = await http.get(
+        Uri.parse('${AuthService.baseurl}/api/reminders'),
+        headers: {
+          'content-type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+      if (res.statusCode == 401) {
+        await AuthService.saveToken(null);
+        return;
+      }
+      if (res.statusCode != 200) return;
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      final list = body['reminders'] as List<dynamic>? ?? const [];
+      final remote = list.map((e) {
+        final m = e as Map<String, dynamic>;
+        final parsedAt = DateTime.tryParse((m['createdAt'] ?? '').toString()) ?? DateTime.now();
+        final txt = (m['time'] ?? '').toString().trim();
+        final tod = _parseTimeLabel(txt) ?? _manualReminderTime;
+        return _ManualReminder(
+          habitId: (m['habitId'] ?? '').toString(),
+          habitTitle: (m['habitTitle'] ?? '').toString(),
+          time: tod,
+          note: m['note']?.toString(),
+          createdAt: parsedAt,
+        );
+      }).toList()
+        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+      if (!mounted) return;
+      setState(() {
+        _manualReminders
+          ..clear()
+          ..addAll(remote);
+      });
+      unawaited(_persistRemindersState());
+    } catch (e, st) {
+      debugPrint('reminder sync: $e\n$st');
+    }
+  }
+
+  Future<bool> _saveReminderToServer(_ManualReminder reminder) async {
+    final token = await AuthService.getToken();
+    if (token == null || token.isEmpty) return false;
+    try {
+      final res = await http.post(
+        Uri.parse('${AuthService.baseurl}/api/reminders'),
+        headers: {
+          'content-type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'habitId': reminder.habitId,
+          'habitTitle': reminder.habitTitle,
+          'time': _formatTimeOfDay(reminder.time),
+          'note': reminder.note ?? '',
+          'createdAt': reminder.createdAt.toIso8601String(),
+        }),
+      );
+      if (res.statusCode == 401) {
+        await AuthService.saveToken(null);
+        return false;
+      }
+      return res.statusCode == 201;
+    } catch (e, st) {
+      debugPrint('reminder save: $e\n$st');
+      return false;
+    }
+  }
+
+  TimeOfDay? _parseTimeLabel(String label) {
+    final m = RegExp(r'^(\d{1,2}):(\d{2})\s*([AP]M)$', caseSensitive: false).firstMatch(label.trim());
+    if (m == null) return null;
+    var hour = int.tryParse(m.group(1) ?? '');
+    final min = int.tryParse(m.group(2) ?? '');
+    final ap = (m.group(3) ?? '').toUpperCase();
+    if (hour == null || min == null) return null;
+    hour = hour.clamp(1, 12).toInt();
+    if (ap == 'AM') {
+      if (hour == 12) hour = 0;
+    } else {
+      if (hour != 12) hour += 12;
+    }
+    return TimeOfDay(hour: hour, minute: min.clamp(0, 59).toInt());
   }
 
   void _scheduleCompanionVideoResyncIfNeeded() {
@@ -284,6 +470,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     super.initState();
     HabitStore.instance.addListener(_onHabitStoreChanged);
     HabitStore.instance.ensureLoaded();
+    unawaited(_loadRemindersState());
     // Animation controller that runs infinitely
     _waveController = AnimationController(
       vsync: this,
@@ -329,6 +516,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _babyDragonController.dispose();
     _companionLensController.dispose();
     _statsPageController.dispose();
+    _manualReminderHabitCtrl.dispose();
     _manualReminderNoteCtrl.dispose();
     super.dispose();
   }
@@ -560,28 +748,30 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.wb_sunny_rounded,
-                          color: const Color(0xFFFFB74D),
-                          size: 32,
-                          shadows: [
-                            Shadow(
-                              color: const Color(0xFFFFB74D).withOpacity(0.45),
-                              blurRadius: 12,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text.rich(
+                    SizedBox(
+                      width: double.infinity,
+                      child: Column(
+                        children: [
+                          Icon(
+                            Icons.wb_sunny_rounded,
+                            color: const Color(0xFFFFB74D),
+                            size: 32,
+                            shadows: [
+                              Shadow(
+                                color: const Color(0xFFFFB74D).withOpacity(0.45),
+                                blurRadius: 12,
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            child: Text.rich(
                             TextSpan(
                               children: [
                                 TextSpan(
                                   text: _greetingForNow(),
-                                  style: GoogleFonts.clickerScript(
+                                  style: GoogleFonts.greatVibes(
                                     fontSize: 20,
                                     color: Colors.white,
                                     height: 1.05,
@@ -589,7 +779,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                 ),
                                 TextSpan(
                                   text: ', ',
-                                  style: GoogleFonts.clickerScript(
+                                  style: GoogleFonts.greatVibes(
                                     fontSize: 20,
                                     color: Colors.white,
                                     height: 1.05,
@@ -597,7 +787,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                 ),
                                 TextSpan(
                                   text: HabitStore.instance.displayName,
-                                  style: GoogleFonts.clickerScript(
+                                  style: GoogleFonts.greatVibes(
                                     fontSize: 24,
                                     color: Colors.white,
                                     height: 1.05,
@@ -605,7 +795,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                 ),
                                 TextSpan(
                                   text: '!',
-                                  style: GoogleFonts.clickerScript(
+                                  style: GoogleFonts.greatVibes(
                                     fontSize: 20,
                                     color: Colors.white,
                                     height: 1.05,
@@ -613,11 +803,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                 ),
                               ],
                             ),
+                            textAlign: TextAlign.center,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
-                        ),
-                      ],
+                          ),
+                        ],
+                      ),
                     ),
                     const SizedBox(height: 20),
                     _buildStatsCarousel(),
@@ -705,6 +897,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         Expanded(
                           child: NotificationListener<ScrollNotification>(
                             onNotification: (ScrollNotification n) {
+                              if (n is OverscrollNotification &&
+                                  n.metrics.axis == Axis.vertical &&
+                                  n.metrics.pixels <= n.metrics.minScrollExtent &&
+                                  n.overscroll < 0) {
+                                // When companion content is already at top, a pull-down gesture
+                                // should collapse the panel itself.
+                                setState(() {
+                                  _navBarHeight =
+                                      (_navBarHeight - n.overscroll).clamp(_minHeight, maxHeight);
+                                });
+                                // Don't consume the notification; consuming here can make the
+                                // first touch feel "stuck" in the inner scroll view.
+                                return false;
+                              }
                               if (n is ScrollEndNotification) {
                                 WidgetsBinding.instance.addPostFrameCallback((_) {
                                   if (mounted) _resumeBabyDragonVideo();
@@ -792,31 +998,34 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           ),
                         ),
 
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Opacity(
-                              opacity: _getIconOpacity(),
-                              child: IgnorePointer(
-                                ignoring: _navBarHeight > _minHeight + 10,
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    IconButton(
-                                      icon: const Icon(Icons.dark_mode_outlined, color: Colors.white, size: 22),
-                                      onPressed: () {},
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(Icons.smart_toy_outlined, color: Color(0xFF00D9FF), size: 22),
-                                      onPressed: _showHabitTeacherBotPanel,
-                                    ),
-                                  ],
+                      GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onVerticalDragUpdate:
+                            _navBarHeight < maxHeight ? _onPanelVerticalDragUpdate : null,
+                        onVerticalDragEnd:
+                            _navBarHeight < maxHeight ? _onPanelVerticalDragEnd : null,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Opacity(
+                                opacity: _getIconOpacity(),
+                                child: IgnorePointer(
+                                  ignoring: _navBarHeight > _minHeight + 10,
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      IconButton(
+                                        icon: const Icon(Icons.smart_toy_outlined, color: Color(0xFF00D9FF), size: 22),
+                                        onPressed: _showHabitTeacherBotPanel,
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                       if (_navBarHeight < maxHeight)
@@ -1305,7 +1514,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     final selectedHabitStillPending = pending.any((h) => h.id == _selectedManualReminderHabit?.id);
     if (!selectedHabitStillPending) {
-      _selectedManualReminderHabit = pending.isNotEmpty ? pending.first : null;
+      _selectedManualReminderHabit = null;
     }
 
     return [
@@ -1346,7 +1555,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ),
             const SizedBox(height: 12),
             Text(
-              'Choose a pending habit, set a time, then save the reminder.',
+              'Type a pending habit name, set a time, then save the reminder.',
               style: TextStyle(
                 color: Colors.white.withOpacity(0.62),
                 fontSize: 12,
@@ -1354,12 +1563,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
             const SizedBox(height: 10),
-            DropdownButtonFormField<String>(
-              value: _selectedManualReminderHabit?.id,
-              dropdownColor: const Color(0xFF18243D),
+            TextField(
+              controller: _manualReminderHabitCtrl,
+              onChanged: (_) {
+                _selectedManualReminderHabit =
+                    _resolveManualReminderHabit(pending, _manualReminderHabitCtrl.text);
+              },
+              style: const TextStyle(color: Colors.white, fontSize: 13),
               decoration: InputDecoration(
                 labelText: 'Habit',
                 labelStyle: TextStyle(color: Colors.white.withOpacity(0.74)),
+                hintText: pending.isEmpty
+                    ? 'No pending habits'
+                    : 'e.g. ${pending.first.title}',
+                hintStyle: TextStyle(color: Colors.white.withOpacity(0.45)),
                 filled: true,
                 fillColor: Colors.white.withOpacity(0.05),
                 border: OutlineInputBorder(
@@ -1375,34 +1592,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   borderSide: BorderSide(color: Color(0xFF00D9FF), width: 1.1),
                 ),
               ),
-              iconEnabledColor: Colors.white.withOpacity(0.72),
-              style: const TextStyle(color: Colors.white, fontSize: 13),
-              items: [
-                for (final h in pending)
-                  DropdownMenuItem<String>(
-                    value: h.id,
-                    child: Text(
-                      h.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-              ],
-              onChanged: pending.isEmpty
-                  ? null
-                  : (id) {
-                      if (id == null) return;
-                      Habit? match;
-                      for (final h in pending) {
-                        if (h.id == id) {
-                          match = h;
-                          break;
-                        }
-                      }
-                      if (match != null) {
-                        setState(() => _selectedManualReminderHabit = match);
-                      }
-                    },
             ),
             const SizedBox(height: 10),
             Row(
@@ -1445,11 +1634,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 const SizedBox(width: 10),
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: pending.isEmpty
-                        ? null
-                        : () => _saveManualReminder(
+                    onPressed: () => _saveManualReminder(
                               context,
-                              selected: _selectedManualReminderHabit,
+                              selected: _resolveManualReminderHabit(
+                                pending,
+                                _manualReminderHabitCtrl.text,
+                              ),
                             ),
                     icon: const Icon(Icons.notifications_active_outlined, size: 18),
                     label: const Text('Set reminder'),
@@ -1726,12 +1916,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     required Habit? selected,
   }) {
     final habit = selected;
-    if (habit == null) return;
+    final typedTitle = _manualReminderHabitCtrl.text.trim();
+    if (habit == null && typedTitle.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Type a habit name first.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    final habitId = habit?.id ?? '';
+    final habitTitle = habit?.title ?? typedTitle;
     final note = _manualReminderNoteCtrl.text.trim();
     final now = DateTime.now();
     final reminder = _ManualReminder(
-      habitId: habit.id,
-      habitTitle: habit.title,
+      habitId: habitId,
+      habitTitle: habitTitle,
       time: _manualReminderTime,
       note: note.isEmpty ? null : note,
       createdAt: now,
@@ -1742,21 +1943,53 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         0,
         _ReminderHistoryEntry(
           title: 'Manual reminder set',
-          detail: '${habit.title} at ${_formatTimeOfDay(_manualReminderTime)}',
+          detail: '$habitTitle at ${_formatTimeOfDay(_manualReminderTime)}',
           createdAt: now,
         ),
       );
       if (_reminderHistory.length > 12) {
         _reminderHistory.removeRange(12, _reminderHistory.length);
       }
+      _manualReminderHabitCtrl.clear();
+      _selectedManualReminderHabit = null;
       _manualReminderNoteCtrl.clear();
     });
+    unawaited(_persistRemindersState());
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('Reminder saved for ${habit.title} (${_formatTimeOfDay(_manualReminderTime)})'),
+        content: Text('Reminder saved for $habitTitle (${_formatTimeOfDay(_manualReminderTime)}) locally'),
         behavior: SnackBarBehavior.floating,
       ),
     );
+    unawaited(() async {
+      final ok = await _saveReminderToServer(reminder);
+      if (!mounted) return;
+      if (!ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Saved locally, but server sync failed. Check backend/login.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      } else {
+        await _syncRemindersFromServer();
+      }
+    }());
+  }
+
+  Habit? _resolveManualReminderHabit(List<Habit> pending, String rawInput) {
+    final typed = rawInput.trim().toLowerCase();
+    if (typed.isEmpty) return null;
+    for (final h in pending) {
+      if (h.title.trim().toLowerCase() == typed) return h;
+    }
+    for (final h in pending) {
+      if (h.title.trim().toLowerCase().startsWith(typed)) return h;
+    }
+    for (final h in pending) {
+      if (h.title.trim().toLowerCase().contains(typed)) return h;
+    }
+    return null;
   }
 
   Widget _reminderHistoryCard() {
@@ -2757,6 +2990,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   void _showStatsPanel() {
+    unawaited(_refreshStatsCacheOnServer());
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -2773,6 +3007,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         );
       },
     );
+  }
+
+  Future<void> _refreshStatsCacheOnServer() async {
+    final token = await AuthService.getToken();
+    if (token == null || token.isEmpty) return;
+    try {
+      await http.get(
+        Uri.parse('${AuthService.baseurl}/api/me/stats-cache?refresh=1'),
+        headers: {
+          'content-type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+    } catch (e, st) {
+      debugPrint('stats refresh: $e\n$st');
+    }
   }
 
   void _showCalendarPanel() {
@@ -2813,7 +3063,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
+  void _onSocialNavTap() {
+    if (_isSocialTemporarilyLocked) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Social is temporarily locked')),
+      );
+      return;
+    }
+    _showSocialPanel();
+  }
+
   Widget _buildBottomNavBar() {
+    final isSocialLocked = _isSocialTemporarilyLocked;
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Container(
@@ -2830,7 +3091,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             _navItem(Icons.pie_chart, "stats", false, onTap: _showStatsPanel),
             const SizedBox(width: 50),
             _navItem(Icons.calendar_today, "Calendar", false, onTap: _showCalendarPanel),
-            _navItem(Icons.groups_rounded, "Social", false, onTap: _showSocialPanel),
+            _navItem(
+              isSocialLocked ? Icons.lock_outline_rounded : Icons.groups_rounded,
+              "Social",
+              false,
+              onTap: _onSocialNavTap,
+            ),
           ],
         ),
       ),
@@ -3185,6 +3451,102 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
     super.dispose();
   }
 
+  void _showPulseHistory() {
+    final s = HabitStore.instance;
+    final counts = s.last7DayCheckinCounts();
+    final avgPerDay = counts.isEmpty ? 0.0 : counts.reduce((a, b) => a + b) / counts.length;
+    final now = DateTime.now();
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF0C1426),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            border: Border.all(color: _mint.withOpacity(0.22)),
+          ),
+          padding: const EdgeInsets.fromLTRB(18, 14, 18, 22),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 44,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                'My pulse history',
+                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Previous 7 days snapshot',
+                style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12),
+              ),
+              const SizedBox(height: 14),
+              ...List<Widget>.generate(7, (i) {
+                final day = now.subtract(Duration(days: 6 - i));
+                final c = counts[i];
+                final percent = s.habits.isEmpty ? 0 : ((c / s.habits.length) * 100).round();
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.03),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white.withOpacity(0.08)),
+                    ),
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 44,
+                          child: Text(
+                            '${day.day}/${day.month}',
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.85),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            '$percent% completion',
+                            style: TextStyle(color: _mint.withOpacity(0.9), fontSize: 12, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                        Text(
+                          '$c hits',
+                          style: TextStyle(color: Colors.white.withOpacity(0.75), fontSize: 12, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }),
+              const SizedBox(height: 4),
+              Text(
+                'Avg ${avgPerDay.toStringAsFixed(avgPerDay >= 10 ? 0 : 1)} check-ins/day · Current streak ${s.currentStreak} days',
+                style: TextStyle(color: Colors.white.withOpacity(0.62), fontSize: 11, fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = HabitStore.instance;
@@ -3273,23 +3635,27 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
                       ],
                     ),
                   ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.white.withOpacity(0.12)),
-                      color: const Color(0xFF152238).withOpacity(0.9),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.date_range, size: 16, color: _violet.withOpacity(0.9)),
-                        const SizedBox(width: 6),
-                        Text(
-                          'This week',
-                          style: TextStyle(color: Colors.white.withOpacity(0.85), fontSize: 12, fontWeight: FontWeight.w600),
-                        ),
-                      ],
+                  InkWell(
+                    onTap: _showPulseHistory,
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white.withOpacity(0.12)),
+                        color: const Color(0xFF152238).withOpacity(0.9),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.history_rounded, size: 16, color: _violet.withOpacity(0.9)),
+                          const SizedBox(width: 6),
+                          Text(
+                            'My history',
+                            style: TextStyle(color: Colors.white.withOpacity(0.85), fontSize: 12, fontWeight: FontWeight.w600),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ],

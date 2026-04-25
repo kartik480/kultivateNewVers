@@ -17,6 +17,10 @@ const UserStatsCacheSchema = new mongoose.Schema(
     level: { type: Number, default: 1 },
     /// Mirrors the Flutter “Your pulse” / Insight Lab panel (Insight sheet).
     pulseDetails: {
+      /// Main ring number shown as "TODAY COMPLETION" in app.
+      todayCompletion: { type: Number, default: 0 },
+      /// Number of habits completed today.
+      doneTodayCount: { type: Number, default: 0 },
       focusScore: { type: Number, default: 0 },
       ringProgress: { type: Number, default: 0 },
       estimatedFocusMinutesToday: { type: Number, default: 0 },

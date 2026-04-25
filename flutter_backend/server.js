@@ -11,6 +11,7 @@ const User = require("./models/User");
 const authRequired = require("./middleware/auth");
 const habitsRouter = require("./routes/habits");
 const statsCalendarRouter = require("./routes/statsCalendar");
+const remindersRouter = require("./routes/reminders");
 
 const app = express();
 
@@ -132,6 +133,7 @@ app.post("/login", async (req, res) => {
 
 app.use("/api/habits", authRequired, habitsRouter);
 app.use("/api/me", authRequired, statsCalendarRouter);
+app.use("/api/reminders", authRequired, remindersRouter);
 
 const PORT = process.env.PORT || 5000;
 

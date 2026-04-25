@@ -11,8 +11,9 @@ class AuthService {
   static String get baseurl {
     if (_apiBaseFromDefine.isNotEmpty) return _apiBaseFromDefine;
     if (kReleaseMode) return _prodApiBase;
-    if (kIsWeb) return "http://localhost:5000";
-    return "http://10.0.2.2:5000";
+    // Use hosted backend by default in debug so physical-device testing
+    // (reminders/stats sync) works without extra run flags.
+    return _prodApiBase;
   }
 
   static Future<void> saveToken(String? token) async {

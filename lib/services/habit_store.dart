@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -564,6 +565,18 @@ class HabitStore extends ChangeNotifier {
   Future<void> toggleCompleteToday(String habitId) async {
     final t = DateTime.now();
     final k = _dateKey(t);
+    _completionsByHabit.putIfAbsent(habitId, () => {});
+    final set = _completionsByHabit[habitId]!;
+
+    // Optimistic update so the checkmark feels instant.
+    if (set.contains(k)) {
+      set.remove(k);
+    } else {
+      set.add(k);
+    }
+    notifyListeners();
+    unawaited(_persist());
+    unawaited(_updateBestStreak());
 
     final token = await AuthService.getToken();
     if (token != null &&
@@ -578,9 +591,9 @@ class HabitStore extends ChangeNotifier {
         if (res.statusCode == 200) {
           final data = jsonDecode(res.body) as Map<String, dynamic>;
           _applyRemoteState(data);
-          await _persist();
-          await _updateBestStreak();
           notifyListeners();
+          unawaited(_persist());
+          unawaited(_updateBestStreak());
           return;
         }
         if (res.statusCode == 401) await AuthService.saveToken(null);
@@ -588,17 +601,6 @@ class HabitStore extends ChangeNotifier {
         debugPrint('toggle api: $e\n$st');
       }
     }
-
-    _completionsByHabit.putIfAbsent(habitId, () => {});
-    final set = _completionsByHabit[habitId]!;
-    if (set.contains(k)) {
-      set.remove(k);
-    } else {
-      set.add(k);
-    }
-    await _persist();
-    await _updateBestStreak();
-    notifyListeners();
   }
 
   Future<void> removeHabit(String habitId) async {

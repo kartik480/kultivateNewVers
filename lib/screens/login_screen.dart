@@ -75,38 +75,7 @@ class _LoginScreenState extends State<LoginScreen> {
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
     SizedBox(height: 50),
-    // 🌱 Logo
-    Center(
-    child: Column(
-    children: [
-    Container(
-    padding: const EdgeInsets.all(4),
-    decoration: BoxDecoration(
-    borderRadius: BorderRadius.circular(18),
-    border: Border.all(
-    color: Colors.lightBlueAccent,
-    width: 2,
-    ),
-    ),
-    child: Image.asset(
-    'images/logo.png',
-    height: 100,
-    width: 100,
-    ),
-    ),
-
-    SizedBox(height: 10),
-    Text(
-    'Kultivate',
-    style: _loginGeo(fontSize: 30, fontWeight: FontWeight.w800, height: 1.15),
-    ),
-    Text(
-    'Build Better Habits',
-    style: _loginGeo(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.white70),
-    ),
-    ],
-    ),
-    ),
+    _buildStartPanel(),
     const SizedBox(height: 40),
     Center(
     child: Text(
@@ -287,6 +256,61 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
+  Widget _buildStartPanel() {
+    const cyan = Color(0xFF00D9FF);
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 104,
+            height: 104,
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: cyan, width: 1.8),
+              boxShadow: [
+                BoxShadow(
+                  color: cyan.withOpacity(0.2),
+                  blurRadius: 16,
+                  spreadRadius: -4,
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Image.asset(
+                'images/logo.png',
+                fit: BoxFit.cover,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          ShaderMask(
+            blendMode: BlendMode.srcIn,
+            shaderCallback: (bounds) => const LinearGradient(
+              colors: [Color(0xFFFFFFFF), Color(0xFF9BEFFF), Color(0xFF00D9FF)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ).createShader(bounds),
+            child: Text(
+              'Kultivate',
+              style: GoogleFonts.clickerScript(
+                fontSize: 36,
+                color: Colors.white,
+                height: 1.05,
+              ),
+            ),
+          ),
+          Text(
+            'Build Better Habits',
+            style: _loginGeo(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.white70),
+          ),
+        ],
+      ),
+    );
+  }
+
   //signup page
   Widget _signUpPage() {
     return Column(
@@ -423,3 +447,4 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 }
+

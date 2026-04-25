@@ -13,6 +13,11 @@ const router = express.Router();
 /// Cached aggregates for the Stats UI (also in Atlas collection `user_stats_cache`).
 router.get("/stats-cache", async (req, res) => {
   try {
+    const shouldRefresh =
+      req.query.refresh === "1" || req.query.refresh === "true";
+    if (shouldRefresh) {
+      await recomputeUserStatsCache(req.userId);
+    }
     let doc = await UserStatsCache.findOne({ userId: req.userId }).lean();
     if (!doc || !doc.pulseDetails) {
       await recomputeUserStatsCache(req.userId);

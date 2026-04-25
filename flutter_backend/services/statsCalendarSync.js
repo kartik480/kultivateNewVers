@@ -276,6 +276,7 @@ async function recomputeUserStatsCache(userId) {
 
   const todayProgressFraction =
     activeHabitsCount > 0 ? doneToday / activeHabitsCount : 0;
+  const todayCompletion = Math.round(todayProgressFraction * 100);
   const streakPart = Math.min(40, current * 4);
   const todayPart = Math.round(todayProgressFraction * 40);
   const volumePart = Math.min(20, Math.round(totalCompletions * 0.5));
@@ -324,6 +325,8 @@ async function recomputeUserStatsCache(userId) {
       totalPoints,
       level,
       pulseDetails: {
+        todayCompletion,
+        doneTodayCount: doneToday,
         focusScore,
         ringProgress,
         estimatedFocusMinutesToday,
