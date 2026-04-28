@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:kultivate_new_ver/services/auth_service.dart';
 import 'package:kultivate_new_ver/services/habit_store.dart';
+import 'package:kultivate_new_ver/services/reminder_alarm_service.dart';
 
 String _categoryForRadialLabel(String label) {
   switch (label) {
@@ -118,6 +119,7 @@ const List<(String label, IconData icon)> _kActivityPresets = [
 
 class _ManualReminder {
   const _ManualReminder({
+    required this.alarmId,
     required this.habitId,
     required this.habitTitle,
     required this.time,
@@ -125,6 +127,7 @@ class _ManualReminder {
     this.note,
   });
 
+  final int alarmId;
   final String habitId;
   final String habitTitle;
   final TimeOfDay time;
@@ -132,6 +135,7 @@ class _ManualReminder {
   final String? note;
 
   Map<String, dynamic> toJson() => {
+    'alarmId': alarmId,
     'habitId': habitId,
     'habitTitle': habitTitle,
     'timeHour': time.hour,
@@ -142,13 +146,16 @@ class _ManualReminder {
 
   factory _ManualReminder.fromJson(Map<String, dynamic> j) {
     return _ManualReminder(
+      alarmId: (j['alarmId'] as num?)?.toInt() ?? 0,
       habitId: (j['habitId'] ?? '').toString(),
       habitTitle: (j['habitTitle'] ?? '').toString(),
       time: TimeOfDay(
         hour: (j['timeHour'] as num?)?.toInt() ?? 7,
         minute: (j['timeMinute'] as num?)?.toInt() ?? 0,
       ),
-      createdAt: DateTime.tryParse((j['createdAt'] ?? '').toString()) ?? DateTime.now(),
+      createdAt:
+          DateTime.tryParse((j['createdAt'] ?? '').toString()) ??
+          DateTime.now(),
       note: j['note']?.toString(),
     );
   }
@@ -175,7 +182,9 @@ class _ReminderHistoryEntry {
     return _ReminderHistoryEntry(
       title: (j['title'] ?? '').toString(),
       detail: (j['detail'] ?? '').toString(),
-      createdAt: DateTime.tryParse((j['createdAt'] ?? '').toString()) ?? DateTime.now(),
+      createdAt:
+          DateTime.tryParse((j['createdAt'] ?? '').toString()) ??
+          DateTime.now(),
     );
   }
 }
@@ -203,6 +212,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   late AnimationController _waveController;
   late VideoPlayerController _babyDragonController;
+
   /// Separate controller so the carousel lens can show the same clip without
   /// attaching two [VideoPlayer]s to one controller (which breaks rendering).
   late VideoPlayerController _companionLensController;
@@ -212,10 +222,34 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   bool _isSocialTemporarilyLocked = true;
   Habit? _selectedManualReminderHabit;
   TimeOfDay _manualReminderTime = const TimeOfDay(hour: 7, minute: 0);
-  final TextEditingController _manualReminderHabitCtrl = TextEditingController();
+  final TextEditingController _manualReminderHabitCtrl =
+      TextEditingController();
   final TextEditingController _manualReminderNoteCtrl = TextEditingController();
   final List<_ManualReminder> _manualReminders = [];
   final List<_ReminderHistoryEntry> _reminderHistory = [];
+
+  int _alarmIdForReminder({
+    required DateTime createdAt,
+    required String habitTitle,
+    required TimeOfDay time,
+  }) {
+    final base = createdAt.microsecondsSinceEpoch.abs();
+    final salt = (habitTitle.length * 97) + (time.hour * 60) + time.minute;
+    return ((base + salt) % 2147483646).toInt() + 1;
+  }
+
+  Future<void> _rescheduleReminderAlarms() async {
+    await ReminderAlarmService.instance.ensureInitialized();
+    await ReminderAlarmService.instance.cancelAll();
+    for (final reminder in _manualReminders) {
+      await ReminderAlarmService.instance.scheduleDailyReminder(
+        alarmId: reminder.alarmId,
+        title: reminder.habitTitle,
+        time: reminder.time,
+        body: reminder.note,
+      );
+    }
+  }
 
   void _onBabyDragonVideoTick() {
     final c = _babyDragonController;
@@ -260,6 +294,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _loadRemindersState() async {
+    await ReminderAlarmService.instance.ensureInitialized();
     final p = await SharedPreferences.getInstance();
     final remindersRaw = p.getString(_kManualReminders);
     final historyRaw = p.getString(_kReminderHistory);
@@ -279,22 +314,43 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       try {
         final list = jsonDecode(historyRaw) as List<dynamic>;
         loadedHistory.addAll(
-          list.map((e) => _ReminderHistoryEntry.fromJson(e as Map<String, dynamic>)),
+          list.map(
+            (e) => _ReminderHistoryEntry.fromJson(e as Map<String, dynamic>),
+          ),
         );
       } catch (_) {}
     }
 
     if (mounted) {
+      final normalized = loadedReminders
+          .map(
+            (r) => r.alarmId > 0
+                ? r
+                : _ManualReminder(
+                    alarmId: _alarmIdForReminder(
+                      createdAt: r.createdAt,
+                      habitTitle: r.habitTitle,
+                      time: r.time,
+                    ),
+                    habitId: r.habitId,
+                    habitTitle: r.habitTitle,
+                    time: r.time,
+                    createdAt: r.createdAt,
+                    note: r.note,
+                  ),
+          )
+          .toList();
       setState(() {
         _manualReminders
           ..clear()
-          ..addAll(loadedReminders);
+          ..addAll(normalized);
         _reminderHistory
           ..clear()
           ..addAll(loadedHistory);
       });
     }
 
+    await _rescheduleReminderAlarms();
     await _syncRemindersFromServer();
   }
 
@@ -330,18 +386,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       final list = body['reminders'] as List<dynamic>? ?? const [];
       final remote = list.map((e) {
         final m = e as Map<String, dynamic>;
-        final parsedAt = DateTime.tryParse((m['createdAt'] ?? '').toString()) ?? DateTime.now();
+        final parsedAt =
+            DateTime.tryParse((m['createdAt'] ?? '').toString()) ??
+            DateTime.now();
         final txt = (m['time'] ?? '').toString().trim();
         final tod = _parseTimeLabel(txt) ?? _manualReminderTime;
+        final fallbackAlarmId = _alarmIdForReminder(
+          createdAt: parsedAt,
+          habitTitle: (m['habitTitle'] ?? '').toString(),
+          time: tod,
+        );
         return _ManualReminder(
+          alarmId: (m['alarmId'] as num?)?.toInt() ?? fallbackAlarmId,
           habitId: (m['habitId'] ?? '').toString(),
           habitTitle: (m['habitTitle'] ?? '').toString(),
           time: tod,
           note: m['note']?.toString(),
           createdAt: parsedAt,
         );
-      }).toList()
-        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      }).toList()..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
       if (!mounted) return;
       setState(() {
@@ -349,6 +412,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ..clear()
           ..addAll(remote);
       });
+      await _rescheduleReminderAlarms();
       unawaited(_persistRemindersState());
     } catch (e, st) {
       debugPrint('reminder sync: $e\n$st');
@@ -366,6 +430,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           'Authorization': 'Bearer $token',
         },
         body: jsonEncode({
+          'alarmId': reminder.alarmId,
           'habitId': reminder.habitId,
           'habitTitle': reminder.habitTitle,
           'time': _formatTimeOfDay(reminder.time),
@@ -385,7 +450,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   TimeOfDay? _parseTimeLabel(String label) {
-    final m = RegExp(r'^(\d{1,2}):(\d{2})\s*([AP]M)$', caseSensitive: false).firstMatch(label.trim());
+    final m = RegExp(
+      r'^(\d{1,2}):(\d{2})\s*([AP]M)$',
+      caseSensitive: false,
+    ).firstMatch(label.trim());
     if (m == null) return null;
     var hour = int.tryParse(m.group(1) ?? '');
     final min = int.tryParse(m.group(2) ?? '');
@@ -402,7 +470,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   void _scheduleCompanionVideoResyncIfNeeded() {
     if (_isSwitchingCompanionVideo || !mounted) return;
-    final targetAsset = _companionAssetForLevel(HabitStore.instance.companionLevel);
+    final targetAsset = _companionAssetForLevel(
+      HabitStore.instance.companionLevel,
+    );
     if (targetAsset == _activeCompanionAsset) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
@@ -413,7 +483,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Future<void> _refreshCompanionVideoForLevel() async {
     if (_isSwitchingCompanionVideo) return;
-    final targetAsset = _companionAssetForLevel(HabitStore.instance.companionLevel);
+    final targetAsset = _companionAssetForLevel(
+      HabitStore.instance.companionLevel,
+    );
     if (targetAsset == _activeCompanionAsset) return;
     _isSwitchingCompanionVideo = true;
 
@@ -477,30 +549,38 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       duration: const Duration(seconds: 2),
     )..repeat();
 
-    _activeCompanionAsset = _companionAssetForLevel(HabitStore.instance.companionLevel);
+    _activeCompanionAsset = _companionAssetForLevel(
+      HabitStore.instance.companionLevel,
+    );
 
     _babyDragonController = _buildCompanionController(_activeCompanionAsset);
     _babyDragonController.addListener(_onBabyDragonVideoTick);
-    _babyDragonController.initialize().then((_) {
-      if (mounted) {
-        setState(() {});
-        _babyDragonController.setLooping(true);
-        _babyDragonController.play();
-      }
-    }).catchError((e, st) {
-      debugPrint('companion main init: $e\n$st');
-    });
+    _babyDragonController
+        .initialize()
+        .then((_) {
+          if (mounted) {
+            setState(() {});
+            _babyDragonController.setLooping(true);
+            _babyDragonController.play();
+          }
+        })
+        .catchError((e, st) {
+          debugPrint('companion main init: $e\n$st');
+        });
 
     _companionLensController = _buildCompanionController(_activeCompanionAsset);
-    _companionLensController.initialize().then((_) {
-      if (!mounted) return;
-      setState(() {});
-      if (_statsPageIndex == 2) {
-        _companionLensController.play();
-      }
-    }).catchError((e, st) {
-      debugPrint('companion lens init: $e\n$st');
-    });
+    _companionLensController
+        .initialize()
+        .then((_) {
+          if (!mounted) return;
+          setState(() {});
+          if (_statsPageIndex == 2) {
+            _companionLensController.play();
+          }
+        })
+        .catchError((e, st) {
+          debugPrint('companion lens init: $e\n$st');
+        });
 
     _statsPageController = PageController();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -522,7 +602,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   double _calculateOpacity(double maxHeight) {
-    double opacity = 1.0 - ((_navBarHeight - _minHeight) / (maxHeight * 0.6 - _minHeight));
+    double opacity =
+        1.0 - ((_navBarHeight - _minHeight) / (maxHeight * 0.6 - _minHeight));
     return opacity.clamp(0.0, 1.0);
   }
 
@@ -534,7 +615,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   void _onPanelVerticalDragUpdate(DragUpdateDetails details) {
     final maxH = MediaQuery.sizeOf(context).height;
     setState(() {
-      _navBarHeight = (_navBarHeight + details.delta.dy).clamp(_minHeight, maxH);
+      _navBarHeight = (_navBarHeight + details.delta.dy).clamp(
+        _minHeight,
+        maxH,
+      );
     });
   }
 
@@ -576,11 +660,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return (Offset(left, top), fabSize);
   }
 
-  void _showHabitCreatePanel({
-    String? initialTitle,
-    String? initialCategory,
-  }) {
-    final fromPreset = initialTitle != null &&
+  void _showHabitCreatePanel({String? initialTitle, String? initialCategory}) {
+    final fromPreset =
+        initialTitle != null &&
         initialTitle.isNotEmpty &&
         initialCategory != null &&
         initialCategory.isNotEmpty;
@@ -714,350 +796,438 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           );
         }
         return Scaffold(
-      backgroundColor: const Color(0xFF0F1023),
-      extendBody: true,
-      bottomNavigationBar: _buildBottomNavBar(),
-      floatingActionButton: Transform.translate(
-        offset: const Offset(0, 27),
-        child: Container(
-          height: 70,
-          width: 70,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: const LinearGradient(colors: [Color(0xFF00D9FF), Color(0xFF00D8FF)]),
-            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.6), blurRadius: 20, spreadRadius: 2)],
-          ),
-          child: IconButton(
-            icon: const Icon(Icons.add, color: Colors.white, size: 32),
-            onPressed: _openActivityRadialMenu,
-          ),
-        ),
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: Opacity(
-              opacity: _calculateOpacity(maxHeight),
-              child: SingleChildScrollView(
-                primary: false,
-                physics: const AlwaysScrollableScrollPhysics(
-                  parent: BouncingScrollPhysics(),
-                ),
-                padding: const EdgeInsets.only(top: 170, left: 16, right: 16, bottom: 150),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SizedBox(
-                      width: double.infinity,
-                      child: Column(
-                        children: [
-                          Icon(
-                            Icons.wb_sunny_rounded,
-                            color: const Color(0xFFFFB74D),
-                            size: 32,
-                            shadows: [
-                              Shadow(
-                                color: const Color(0xFFFFB74D).withOpacity(0.45),
-                                blurRadius: 12,
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 4),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                            child: Text.rich(
-                            TextSpan(
-                              children: [
-                                TextSpan(
-                                  text: _greetingForNow(),
-                                  style: GoogleFonts.greatVibes(
-                                    fontSize: 20,
-                                    color: Colors.white,
-                                    height: 1.05,
-                                  ),
-                                ),
-                                TextSpan(
-                                  text: ', ',
-                                  style: GoogleFonts.greatVibes(
-                                    fontSize: 20,
-                                    color: Colors.white,
-                                    height: 1.05,
-                                  ),
-                                ),
-                                TextSpan(
-                                  text: HabitStore.instance.displayName,
-                                  style: GoogleFonts.greatVibes(
-                                    fontSize: 24,
-                                    color: Colors.white,
-                                    height: 1.05,
-                                  ),
-                                ),
-                                TextSpan(
-                                  text: '!',
-                                  style: GoogleFonts.greatVibes(
-                                    fontSize: 20,
-                                    color: Colors.white,
-                                    height: 1.05,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            textAlign: TextAlign.center,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    _buildStatsCarousel(),
-                    const SizedBox(height: 25),
-                    AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 280),
-                      switchInCurve: Curves.easeOutCubic,
-                      switchOutCurve: Curves.easeInCubic,
-                      transitionBuilder: _buildStatsSwapTransition,
-                      child: Column(
-                        key: ValueKey<int>(_statsPageIndex),
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _statsPanelSectionTitle(),
-                            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            _statsPanelSectionSubtitle(),
-                            style: TextStyle(fontSize: 13, height: 1.35, color: Colors.white.withOpacity(0.58)),
-                          ),
-                          const SizedBox(height: 14),
-                        ],
-                      ),
-                    ),
-                    AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 320),
-                      switchInCurve: Curves.easeOutCubic,
-                      switchOutCurve: Curves.easeInCubic,
-                      transitionBuilder: _buildStatsSwapTransition,
-                      child: Column(
-                        key: ValueKey<String>('stats-content-$_statsPageIndex'),
-                        children: _buildHabitSectionForStatsPage(context, _statsPageIndex),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-
-          if (_navBarHeight > _minHeight)
-            Positioned.fill(
-              child: IgnorePointer(
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(
-                    sigmaX: (1.0 - _calculateOpacity(maxHeight)) * 15,
-                    sigmaY: (1.0 - _calculateOpacity(maxHeight)) * 15,
-                  ),
-                  child: Container(color: Colors.black.withOpacity(0.2 * (1.0 - _calculateOpacity(maxHeight)))),
-                ),
-              ),
-            ),
-
-          Positioned(
-            top: 0, left: 0, right: 0,
-            height: _navBarHeight,
+          backgroundColor: const Color(0xFF0F1023),
+          extendBody: true,
+          bottomNavigationBar: _buildBottomNavBar(),
+          floatingActionButton: Transform.translate(
+            offset: const Offset(0, 27),
             child: Container(
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1A1B3A),
-                  borderRadius: BorderRadius.vertical(bottom: Radius.circular(_navBarHeight >= maxHeight ? 0 : 30)),
+              height: 70,
+              width: 70,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF00D9FF), Color(0xFF00D8FF)],
                 ),
-                child: SafeArea(
-                  bottom: false,
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      GestureDetector(
-                        behavior: HitTestBehavior.translucent,
-                        onVerticalDragUpdate:
-                            _navBarHeight < maxHeight ? _onPanelVerticalDragUpdate : null,
-                        onVerticalDragEnd:
-                            _navBarHeight < maxHeight ? _onPanelVerticalDragEnd : null,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 12.0),
-                          child: SizedBox(
-                            height: 12,
-                            width: double.infinity,
-                          ),
-                        ),
-                      ),
-
-                      if (_navBarHeight > 250)
-                        Expanded(
-                          child: NotificationListener<ScrollNotification>(
-                            onNotification: (ScrollNotification n) {
-                              if (n is OverscrollNotification &&
-                                  n.metrics.axis == Axis.vertical &&
-                                  n.metrics.pixels <= n.metrics.minScrollExtent &&
-                                  n.overscroll < 0) {
-                                // When companion content is already at top, a pull-down gesture
-                                // should collapse the panel itself.
-                                setState(() {
-                                  _navBarHeight =
-                                      (_navBarHeight - n.overscroll).clamp(_minHeight, maxHeight);
-                                });
-                                // Don't consume the notification; consuming here can make the
-                                // first touch feel "stuck" in the inner scroll view.
-                                return false;
-                              }
-                              if (n is ScrollEndNotification) {
-                                WidgetsBinding.instance.addPostFrameCallback((_) {
-                                  if (mounted) _resumeBabyDragonVideo();
-                                });
-                              }
-                              return false;
-                            },
-                            child: SingleChildScrollView(
-                              physics: const BouncingScrollPhysics(),
-                              padding: const EdgeInsets.fromLTRB(24, 10, 24, 140),
-                              child: Column(
-                                children: [
-                                IconButton(
-                                  icon: const Icon(Icons.keyboard_arrow_up, color: Colors.white, size: 30),
-                                  onPressed: () => setState(() => _navBarHeight = _minHeight),
-                                ),
-                                const Text("My Companions", style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
-                                const SizedBox(height: 20),
-                                _buildCompanionVideoFrame(),
-                                const SizedBox(height: 20),
-
-                                // statistical progressive bar
-                                ListenableBuilder(
-                                  listenable: HabitStore.instance,
-                                  builder: (context, _) {
-                                    final progressPct =
-                                        (HabitStore.instance.companionBondProgress * 100).round();
-                                    return Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            const Text(
-                                              "Bond level",
-                                              style: TextStyle(color: Colors.white70, fontSize: 14),
-                                            ),
-                                            const Spacer(),
-                                            Text(
-                                              '$progressPct%',
-                                              style: const TextStyle(
-                                                color: Color(0xFF00D9FF),
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.w700,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 8),
-                                        ClipRRect(
-                                          borderRadius: BorderRadius.circular(10),
-                                          child: LinearProgressIndicator(
-                                            value: HabitStore.instance.companionBondProgress,
-                                            minHeight: 12,
-                                            backgroundColor: Colors.white10,
-                                            color: const Color(0xFF00D9FF),
-                                          ),
-                                        ),
-                                      ],
-                                    );
-                                  },
-                                ),
-                                const SizedBox(height: 25),
-                                _menuItem(
-                                  Icons.favorite,
-                                  "Companion Status",
-                                  "Get new skins and accessories",
-                                  onTap: () => _showCompanionStatusSheet(context),
-                                ),
-                                const SizedBox(height: 12),
-                                _buildGamificationSection(),
-                              ],
-                            ),
-                            ),
-                          ),
-                        )
-                      else
-                        Expanded(
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onVerticalDragUpdate:
-                                _navBarHeight < maxHeight ? _onPanelVerticalDragUpdate : null,
-                            onVerticalDragEnd:
-                                _navBarHeight < maxHeight ? _onPanelVerticalDragEnd : null,
-                            child: const ColoredBox(color: Colors.transparent),
-                          ),
-                        ),
-
-                      GestureDetector(
-                        behavior: HitTestBehavior.translucent,
-                        onVerticalDragUpdate:
-                            _navBarHeight < maxHeight ? _onPanelVerticalDragUpdate : null,
-                        onVerticalDragEnd:
-                            _navBarHeight < maxHeight ? _onPanelVerticalDragEnd : null,
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.6),
+                    blurRadius: 20,
+                    spreadRadius: 2,
+                  ),
+                ],
+              ),
+              child: IconButton(
+                icon: const Icon(Icons.add, color: Colors.white, size: 32),
+                onPressed: _openActivityRadialMenu,
+              ),
+            ),
+          ),
+          floatingActionButtonLocation:
+              FloatingActionButtonLocation.centerDocked,
+          body: Stack(
+            children: [
+              Positioned.fill(
+                child: Opacity(
+                  opacity: _calculateOpacity(maxHeight),
+                  child: SingleChildScrollView(
+                    primary: false,
+                    physics: const AlwaysScrollableScrollPhysics(
+                      parent: BouncingScrollPhysics(),
+                    ),
+                    padding: const EdgeInsets.only(
+                      top: 170,
+                      left: 16,
+                      right: 16,
+                      bottom: 150,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(
+                          width: double.infinity,
+                          child: Column(
                             children: [
-                              Opacity(
-                                opacity: _getIconOpacity(),
-                                child: IgnorePointer(
-                                  ignoring: _navBarHeight > _minHeight + 10,
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
+                              Icon(
+                                Icons.wb_sunny_rounded,
+                                color: const Color(0xFFFFB74D),
+                                size: 32,
+                                shadows: [
+                                  Shadow(
+                                    color: const Color(
+                                      0xFFFFB74D,
+                                    ).withOpacity(0.45),
+                                    blurRadius: 12,
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                ),
+                                child: Text.rich(
+                                  TextSpan(
                                     children: [
-                                      IconButton(
-                                        icon: const Icon(Icons.smart_toy_outlined, color: Color(0xFF00D9FF), size: 22),
-                                        onPressed: _showHabitTeacherBotPanel,
+                                      TextSpan(
+                                        text: _greetingForNow(),
+                                        style: GoogleFonts.greatVibes(
+                                          fontSize: 20,
+                                          color: Colors.white,
+                                          height: 1.05,
+                                        ),
+                                      ),
+                                      TextSpan(
+                                        text: ', ',
+                                        style: GoogleFonts.greatVibes(
+                                          fontSize: 20,
+                                          color: Colors.white,
+                                          height: 1.05,
+                                        ),
+                                      ),
+                                      TextSpan(
+                                        text: HabitStore.instance.displayName,
+                                        style: GoogleFonts.greatVibes(
+                                          fontSize: 24,
+                                          color: Colors.white,
+                                          height: 1.05,
+                                        ),
+                                      ),
+                                      TextSpan(
+                                        text: '!',
+                                        style: GoogleFonts.greatVibes(
+                                          fontSize: 20,
+                                          color: Colors.white,
+                                          height: 1.05,
+                                        ),
                                       ),
                                     ],
                                   ),
+                                  textAlign: TextAlign.center,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                               ),
                             ],
                           ),
                         ),
+                        const SizedBox(height: 20),
+                        _buildStatsCarousel(),
+                        const SizedBox(height: 25),
+                        AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 280),
+                          switchInCurve: Curves.easeOutCubic,
+                          switchOutCurve: Curves.easeInCubic,
+                          transitionBuilder: _buildStatsSwapTransition,
+                          child: Column(
+                            key: ValueKey<int>(_statsPageIndex),
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _statsPanelSectionTitle(),
+                                style: const TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                _statsPanelSectionSubtitle(),
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  height: 1.35,
+                                  color: Colors.white.withOpacity(0.58),
+                                ),
+                              ),
+                              const SizedBox(height: 14),
+                            ],
+                          ),
+                        ),
+                        AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 320),
+                          switchInCurve: Curves.easeOutCubic,
+                          switchOutCurve: Curves.easeInCubic,
+                          transitionBuilder: _buildStatsSwapTransition,
+                          child: Column(
+                            key: ValueKey<String>(
+                              'stats-content-$_statsPageIndex',
+                            ),
+                            children: _buildHabitSectionForStatsPage(
+                              context,
+                              _statsPageIndex,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+              if (_navBarHeight > _minHeight)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(
+                        sigmaX: (1.0 - _calculateOpacity(maxHeight)) * 15,
+                        sigmaY: (1.0 - _calculateOpacity(maxHeight)) * 15,
                       ),
-                      if (_navBarHeight < maxHeight)
+                      child: Container(
+                        color: Colors.black.withOpacity(
+                          0.2 * (1.0 - _calculateOpacity(maxHeight)),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                height: _navBarHeight,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1A1B3A),
+                    borderRadius: BorderRadius.vertical(
+                      bottom: Radius.circular(
+                        _navBarHeight >= maxHeight ? 0 : 30,
+                      ),
+                    ),
+                  ),
+                  child: SafeArea(
+                    bottom: false,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
                         GestureDetector(
                           behavior: HitTestBehavior.translucent,
-                          onVerticalDragUpdate: _onPanelVerticalDragUpdate,
-                          onVerticalDragEnd: _onPanelVerticalDragEnd,
-                          child: SizedBox(
-                            height: 52,
-                            width: double.infinity,
-                            child: Align(
-                              alignment: Alignment.topCenter,
-                              child: Container(
-                                height: 9,
-                                width: 112,
-                                margin: const EdgeInsets.only(top: 10),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF00D9FF),
-                                  borderRadius: BorderRadius.circular(50),
+                          onVerticalDragUpdate: _navBarHeight < maxHeight
+                              ? _onPanelVerticalDragUpdate
+                              : null,
+                          onVerticalDragEnd: _navBarHeight < maxHeight
+                              ? _onPanelVerticalDragEnd
+                              : null,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12.0,
+                            ),
+                            child: SizedBox(height: 12, width: double.infinity),
+                          ),
+                        ),
+
+                        if (_navBarHeight > 250)
+                          Expanded(
+                            child: NotificationListener<ScrollNotification>(
+                              onNotification: (ScrollNotification n) {
+                                if (n is OverscrollNotification &&
+                                    n.metrics.axis == Axis.vertical &&
+                                    n.metrics.pixels <=
+                                        n.metrics.minScrollExtent &&
+                                    n.overscroll < 0) {
+                                  // When companion content is already at top, a pull-down gesture
+                                  // should collapse the panel itself.
+                                  setState(() {
+                                    _navBarHeight =
+                                        (_navBarHeight - n.overscroll).clamp(
+                                          _minHeight,
+                                          maxHeight,
+                                        );
+                                  });
+                                  // Don't consume the notification; consuming here can make the
+                                  // first touch feel "stuck" in the inner scroll view.
+                                  return false;
+                                }
+                                if (n is ScrollEndNotification) {
+                                  WidgetsBinding.instance.addPostFrameCallback((
+                                    _,
+                                  ) {
+                                    if (mounted) _resumeBabyDragonVideo();
+                                  });
+                                }
+                                return false;
+                              },
+                              child: SingleChildScrollView(
+                                physics: const BouncingScrollPhysics(),
+                                padding: const EdgeInsets.fromLTRB(
+                                  24,
+                                  10,
+                                  24,
+                                  140,
+                                ),
+                                child: Column(
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(
+                                        Icons.keyboard_arrow_up,
+                                        color: Colors.white,
+                                        size: 30,
+                                      ),
+                                      onPressed: () => setState(
+                                        () => _navBarHeight = _minHeight,
+                                      ),
+                                    ),
+                                    const Text(
+                                      "My Companions",
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 24,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 20),
+                                    _buildCompanionVideoFrame(),
+                                    const SizedBox(height: 20),
+
+                                    // statistical progressive bar
+                                    ListenableBuilder(
+                                      listenable: HabitStore.instance,
+                                      builder: (context, _) {
+                                        final progressPct =
+                                            (HabitStore
+                                                        .instance
+                                                        .companionBondProgress *
+                                                    100)
+                                                .round();
+                                        return Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                const Text(
+                                                  "Bond level",
+                                                  style: TextStyle(
+                                                    color: Colors.white70,
+                                                    fontSize: 14,
+                                                  ),
+                                                ),
+                                                const Spacer(),
+                                                Text(
+                                                  '$progressPct%',
+                                                  style: const TextStyle(
+                                                    color: Color(0xFF00D9FF),
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 8),
+                                            ClipRRect(
+                                              borderRadius:
+                                                  BorderRadius.circular(10),
+                                              child: LinearProgressIndicator(
+                                                value: HabitStore
+                                                    .instance
+                                                    .companionBondProgress,
+                                                minHeight: 12,
+                                                backgroundColor: Colors.white10,
+                                                color: const Color(0xFF00D9FF),
+                                              ),
+                                            ),
+                                          ],
+                                        );
+                                      },
+                                    ),
+                                    const SizedBox(height: 25),
+                                    _menuItem(
+                                      Icons.favorite,
+                                      "Companion Status",
+                                      "Get new skins and accessories",
+                                      onTap: () =>
+                                          _showCompanionStatusSheet(context),
+                                    ),
+                                    const SizedBox(height: 12),
+                                    _buildGamificationSection(),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          )
+                        else
+                          Expanded(
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onVerticalDragUpdate: _navBarHeight < maxHeight
+                                  ? _onPanelVerticalDragUpdate
+                                  : null,
+                              onVerticalDragEnd: _navBarHeight < maxHeight
+                                  ? _onPanelVerticalDragEnd
+                                  : null,
+                              child: const ColoredBox(
+                                color: Colors.transparent,
+                              ),
+                            ),
+                          ),
+
+                        GestureDetector(
+                          behavior: HitTestBehavior.translucent,
+                          onVerticalDragUpdate: _navBarHeight < maxHeight
+                              ? _onPanelVerticalDragUpdate
+                              : null,
+                          onVerticalDragEnd: _navBarHeight < maxHeight
+                              ? _onPanelVerticalDragEnd
+                              : null,
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Opacity(
+                                  opacity: _getIconOpacity(),
+                                  child: IgnorePointer(
+                                    ignoring: _navBarHeight > _minHeight + 10,
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        IconButton(
+                                          icon: const Icon(
+                                            Icons.smart_toy_outlined,
+                                            color: Color(0xFF00D9FF),
+                                            size: 22,
+                                          ),
+                                          onPressed: _showHabitTeacherBotPanel,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        if (_navBarHeight < maxHeight)
+                          GestureDetector(
+                            behavior: HitTestBehavior.translucent,
+                            onVerticalDragUpdate: _onPanelVerticalDragUpdate,
+                            onVerticalDragEnd: _onPanelVerticalDragEnd,
+                            child: SizedBox(
+                              height: 52,
+                              width: double.infinity,
+                              child: Align(
+                                alignment: Alignment.topCenter,
+                                child: Container(
+                                  height: 9,
+                                  width: 112,
+                                  margin: const EdgeInsets.only(top: 10),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF00D9FF),
+                                    borderRadius: BorderRadius.circular(50),
+                                  ),
                                 ),
                               ),
                             ),
                           ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
-            ),
+              ),
+            ],
           ),
-        ],
-      ),
-    );
+        );
       },
     );
   }
@@ -1093,7 +1263,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         Text(
           title,
           textAlign: TextAlign.center,
-          style: TextStyle(color: Colors.white70, fontSize: titleFontSize, height: 1.2),
+          style: TextStyle(
+            color: Colors.white70,
+            fontSize: titleFontSize,
+            height: 1.2,
+          ),
         ),
         const SizedBox(height: 8),
         TweenAnimationBuilder<double>(
@@ -1140,10 +1314,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           crossAxisAlignment: CrossAxisAlignment.baseline,
           textBaseline: TextBaseline.alphabetic,
           children: [
-            Text(value, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: valueFontSize)),
+            Text(
+              value,
+              style: TextStyle(
+                color: color,
+                fontWeight: FontWeight.bold,
+                fontSize: valueFontSize,
+              ),
+            ),
             if (unit.isNotEmpty) ...[
               const SizedBox(width: 2),
-              Text(unit, style: TextStyle(color: color.withOpacity(0.85), fontWeight: FontWeight.w600, fontSize: unitFontSize)),
+              Text(
+                unit,
+                style: TextStyle(
+                  color: color.withOpacity(0.85),
+                  fontWeight: FontWeight.w600,
+                  fontSize: unitFontSize,
+                ),
+              ),
             ],
           ],
         ),
@@ -1160,10 +1348,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final s = HabitStore.instance;
     final tp = s.todayProgressFraction;
     final fm = s.estimatedFocusMinutesToday;
-    final focusVal = fm <= 0 ? '0' : (fm < 60 ? '$fm' : (fm / 60).toStringAsFixed(fm >= 600 ? 0 : 1));
+    final focusVal = fm <= 0
+        ? '0'
+        : (fm < 60 ? '$fm' : (fm / 60).toStringAsFixed(fm >= 600 ? 0 : 1));
     final focusUnit = fm >= 60 ? 'h' : 'm';
-    final curProg = s.habits.isEmpty ? 0.0 : (s.currentStreak / 30.0).clamp(0.0, 1.0);
-    final bestProg = s.bestStreakRecorded == 0 ? 0.0 : (s.bestStreakRecorded / 60.0).clamp(0.0, 1.0);
+    final curProg = s.habits.isEmpty
+        ? 0.0
+        : (s.currentStreak / 30.0).clamp(0.0, 1.0);
+    final bestProg = s.bestStreakRecorded == 0
+        ? 0.0
+        : (s.bestStreakRecorded / 60.0).clamp(0.0, 1.0);
     const cyan = Color(0xFF00D9FF);
 
     return Container(
@@ -1201,10 +1395,31 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      _buildVerticalStat("current\nStreak", '${s.currentStreak}', curProg, Colors.orange),
-                      _buildVerticalStat("Today's\nProgress", '${(tp * 100).round()}%', tp.clamp(0.0, 1.0), Colors.orange),
-                      _buildVerticalStat("Focus\nTime", focusVal, (fm / 120.0).clamp(0.0, 1.0), Colors.orange, unit: focusUnit),
-                      _buildVerticalStat("Best\nStreak", '${s.bestStreakRecorded}', bestProg, Colors.orange),
+                      _buildVerticalStat(
+                        "current\nStreak",
+                        '${s.currentStreak}',
+                        curProg,
+                        Colors.orange,
+                      ),
+                      _buildVerticalStat(
+                        "Today's\nProgress",
+                        '${(tp * 100).round()}%',
+                        tp.clamp(0.0, 1.0),
+                        Colors.orange,
+                      ),
+                      _buildVerticalStat(
+                        "Focus\nTime",
+                        focusVal,
+                        (fm / 120.0).clamp(0.0, 1.0),
+                        Colors.orange,
+                        unit: focusUnit,
+                      ),
+                      _buildVerticalStat(
+                        "Best\nStreak",
+                        '${s.bestStreakRecorded}',
+                        bestProg,
+                        Colors.orange,
+                      ),
                     ],
                   ),
                 );
@@ -1283,7 +1498,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               const SizedBox(height: 2),
               Text(
                 'Reminder clock',
-                style: TextStyle(color: Colors.white.withOpacity(0.62), fontSize: 12, fontWeight: FontWeight.w600),
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.62),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ],
           );
@@ -1371,13 +1590,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             if (_companionLensController.value.hasError) {
                               return _unsupportedVideoFallback(compact: true);
                             }
-                            final ready = _companionLensController.value.isInitialized;
+                            final ready =
+                                _companionLensController.value.isInitialized;
                             if (!ready) {
                               return const Center(
                                 child: SizedBox(
                                   width: 22,
                                   height: 22,
-                                  child: CircularProgressIndicator(strokeWidth: 2, color: cyan),
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: cyan,
+                                  ),
                                 ),
                               );
                             }
@@ -1385,15 +1608,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               fit: BoxFit.cover,
                               alignment: Alignment.center,
                               child: SizedBox(
-                                width: _companionLensController.value.size.width,
-                                height: _companionLensController.value.size.height,
+                                width:
+                                    _companionLensController.value.size.width,
+                                height:
+                                    _companionLensController.value.size.height,
                                 child: Stack(
                                   fit: StackFit.expand,
                                   children: [
                                     Positioned.fill(
                                       child: IgnorePointer(
                                         ignoring: true,
-                                        child: VideoPlayer(_companionLensController),
+                                        child: VideoPlayer(
+                                          _companionLensController,
+                                        ),
                                       ),
                                     ),
                                     Positioned.fill(
@@ -1429,7 +1656,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     const SizedBox(height: 4),
                     Text(
                       '$bond% bond',
-                      style: const TextStyle(color: cyan, fontSize: 13, fontWeight: FontWeight.w700),
+                      style: const TextStyle(
+                        color: cyan,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                     Text(
                       'Grows with check-ins',
@@ -1507,12 +1738,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   List<Widget> _buildReminderSection(BuildContext context) {
     final store = HabitStore.instance;
     final now = DateTime.now();
-    final pending = store.habits
-        .where((h) => !store.isCompletedOn(h.id, now))
-        .toList()
-      ..sort((a, b) => store.habitStreak(a.id).compareTo(store.habitStreak(b.id)));
+    final pending =
+        store.habits.where((h) => !store.isCompletedOn(h.id, now)).toList()
+          ..sort(
+            (a, b) =>
+                store.habitStreak(a.id).compareTo(store.habitStreak(b.id)),
+          );
 
-    final selectedHabitStillPending = pending.any((h) => h.id == _selectedManualReminderHabit?.id);
+    final selectedHabitStillPending = pending.any(
+      (h) => h.id == _selectedManualReminderHabit?.id,
+    );
     if (!selectedHabitStillPending) {
       _selectedManualReminderHabit = null;
     }
@@ -1531,7 +1766,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           children: [
             Row(
               children: [
-                const Icon(Icons.alarm_add_rounded, color: Color(0xFF00D9FF), size: 20),
+                const Icon(
+                  Icons.alarm_add_rounded,
+                  color: Color(0xFF00D9FF),
+                  size: 20,
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -1562,12 +1801,30 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 fontWeight: FontWeight.w500,
               ),
             ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: () => _requestReminderPermissions(context),
+                icon: const Icon(Icons.lock_open_rounded, size: 16),
+                label: const Text('Enable reminder permissions'),
+                style: TextButton.styleFrom(
+                  foregroundColor: const Color(0xFF00D9FF),
+                  textStyle: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
             const SizedBox(height: 10),
             TextField(
               controller: _manualReminderHabitCtrl,
               onChanged: (_) {
-                _selectedManualReminderHabit =
-                    _resolveManualReminderHabit(pending, _manualReminderHabitCtrl.text);
+                _selectedManualReminderHabit = _resolveManualReminderHabit(
+                  pending,
+                  _manualReminderHabitCtrl.text,
+                );
               },
               style: const TextStyle(color: Colors.white, fontSize: 13),
               decoration: InputDecoration(
@@ -1607,8 +1864,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           return Theme(
                             data: Theme.of(ctx).copyWith(
                               colorScheme: Theme.of(ctx).colorScheme.copyWith(
-                                    primary: const Color(0xFF00D9FF),
-                                  ),
+                                primary: const Color(0xFF00D9FF),
+                              ),
                             ),
                             child: child ?? const SizedBox.shrink(),
                           );
@@ -1635,22 +1892,29 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 Expanded(
                   child: ElevatedButton.icon(
                     onPressed: () => _saveManualReminder(
-                              context,
-                              selected: _resolveManualReminderHabit(
-                                pending,
-                                _manualReminderHabitCtrl.text,
-                              ),
-                            ),
-                    icon: const Icon(Icons.notifications_active_outlined, size: 18),
+                      context,
+                      selected: _resolveManualReminderHabit(
+                        pending,
+                        _manualReminderHabitCtrl.text,
+                      ),
+                    ),
+                    icon: const Icon(
+                      Icons.notifications_active_outlined,
+                      size: 18,
+                    ),
                     label: const Text('Set reminder'),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF00D9FF).withOpacity(0.24),
+                      backgroundColor: const Color(
+                        0xFF00D9FF,
+                      ).withOpacity(0.24),
                       foregroundColor: Colors.white,
                       disabledBackgroundColor: Colors.white.withOpacity(0.08),
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
-                        side: BorderSide(color: const Color(0xFF00D9FF).withOpacity(0.42)),
+                        side: BorderSide(
+                          color: const Color(0xFF00D9FF).withOpacity(0.42),
+                        ),
                       ),
                     ),
                   ),
@@ -1698,7 +1962,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(Icons.alarm, color: Color(0xFF00D9FF), size: 16),
+                      const Icon(
+                        Icons.alarm,
+                        color: Color(0xFF00D9FF),
+                        size: 16,
+                      ),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Column(
@@ -1749,7 +2017,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           children: [
             Row(
               children: [
-                const Text('Bond level', style: TextStyle(color: Colors.white70, fontSize: 14)),
+                const Text(
+                  'Bond level',
+                  style: TextStyle(color: Colors.white70, fontSize: 14),
+                ),
                 const Spacer(),
                 Text(
                   '${(HabitStore.instance.companionBondProgress * 100).round()}%',
@@ -1782,17 +2053,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Widget _buildCompanionStrengthPanel() {
     final s = HabitStore.instance;
     final bondPct = (s.companionBondProgress * 100).round();
-    final streakPower = ((s.currentStreak / 30) * 100).clamp(0.0, 100.0).round();
-    final syncScore = ((s.totalCompletions / 500) * 100).clamp(0.0, 100.0).round();
+    final streakPower = ((s.currentStreak / 30) * 100)
+        .clamp(0.0, 100.0)
+        .round();
+    final syncScore = ((s.totalCompletions / 500) * 100)
+        .clamp(0.0, 100.0)
+        .round();
     final strengthScore =
         ((bondPct * 0.6) + (streakPower * 0.25) + (syncScore * 0.15)).round();
     final tier = strengthScore >= 80
         ? 'Elite'
         : strengthScore >= 60
-            ? 'Advanced'
-            : strengthScore >= 35
-                ? 'Rising'
-                : 'Starter';
+        ? 'Advanced'
+        : strengthScore >= 35
+        ? 'Rising'
+        : 'Starter';
 
     return Container(
       width: double.infinity,
@@ -1807,7 +2082,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         children: [
           Row(
             children: [
-              const Icon(Icons.shield_moon_rounded, color: Color(0xFF00D9FF), size: 20),
+              const Icon(
+                Icons.shield_moon_rounded,
+                color: Color(0xFF00D9FF),
+                size: 20,
+              ),
               const SizedBox(width: 8),
               Text(
                 'Companion strength',
@@ -1911,10 +2190,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  void _saveManualReminder(
-    BuildContext context, {
-    required Habit? selected,
-  }) {
+  void _saveManualReminder(BuildContext context, {required Habit? selected}) {
     final habit = selected;
     final typedTitle = _manualReminderHabitCtrl.text.trim();
     if (habit == null && typedTitle.isEmpty) {
@@ -1931,6 +2207,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final note = _manualReminderNoteCtrl.text.trim();
     final now = DateTime.now();
     final reminder = _ManualReminder(
+      alarmId: _alarmIdForReminder(
+        createdAt: now,
+        habitTitle: habitTitle,
+        time: _manualReminderTime,
+      ),
       habitId: habitId,
       habitTitle: habitTitle,
       time: _manualReminderTime,
@@ -1955,19 +2236,32 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       _manualReminderNoteCtrl.clear();
     });
     unawaited(_persistRemindersState());
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Reminder saved for $habitTitle (${_formatTimeOfDay(_manualReminderTime)}) locally'),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
     unawaited(() async {
+      final alarmOk = await ReminderAlarmService.instance.scheduleDailyReminder(
+        alarmId: reminder.alarmId,
+        title: reminder.habitTitle,
+        time: reminder.time,
+        body: reminder.note,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            alarmOk
+                ? 'Reminder alarm set for $habitTitle (${_formatTimeOfDay(_manualReminderTime)})'
+                : 'Reminder saved, but alarm permission is blocked. Enable notifications/exact alarms.',
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
       final ok = await _saveReminderToServer(reminder);
       if (!mounted) return;
       if (!ok) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Saved locally, but server sync failed. Check backend/login.'),
+            content: Text(
+              'Saved locally, but server sync failed. Check backend/login.',
+            ),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -1975,6 +2269,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         await _syncRemindersFromServer();
       }
     }());
+  }
+
+  Future<void> _requestReminderPermissions(BuildContext context) async {
+    final granted = await ReminderAlarmService.instance
+        .requestReminderPermissions();
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          granted
+              ? 'Reminder permissions enabled. Alarms can ring on time.'
+              : 'Reminder permissions are still blocked. Enable notifications and exact alarms in settings.',
+        ),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   Habit? _resolveManualReminderHabit(List<Habit> pending, String rawInput) {
@@ -2006,7 +2316,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         children: [
           Row(
             children: [
-              const Icon(Icons.history_rounded, color: Color(0xFF00D9FF), size: 18),
+              const Icon(
+                Icons.history_rounded,
+                color: Color(0xFF00D9FF),
+                size: 18,
+              ),
               const SizedBox(width: 7),
               Text(
                 'Reminder history',
@@ -2086,13 +2400,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   String _formatTimeOfDay(TimeOfDay time) {
     final now = DateTime.now();
     return _formatReminderClock(
-      DateTime(
-        now.year,
-        now.month,
-        now.day,
-        time.hour,
-        time.minute,
-      ),
+      DateTime(now.year, now.month, now.day, time.hour, time.minute),
     );
   }
 
@@ -2136,8 +2444,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ),
             child: Icon(icon, color: const Color(0xFF00D9FF)),
           ),
-          title: Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          subtitle: Text(subtitle, style: const TextStyle(color: Colors.white60)),
+          title: Text(
+            title,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          subtitle: Text(
+            subtitle,
+            style: const TextStyle(color: Colors.white60),
+          ),
           trailing: onTap != null
               ? const Icon(Icons.chevron_right, color: Colors.white38)
               : null,
@@ -2165,7 +2482,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   color: Color(0xFF1A1B3A),
                   borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
                   boxShadow: [
-                    BoxShadow(color: Colors.black54, blurRadius: 24, offset: Offset(0, -4)),
+                    BoxShadow(
+                      color: Colors.black54,
+                      blurRadius: 24,
+                      offset: Offset(0, -4),
+                    ),
                   ],
                 ),
                 child: Column(
@@ -2194,7 +2515,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             ),
                           ),
                           IconButton(
-                            icon: const Icon(Icons.close, color: Colors.white70),
+                            icon: const Icon(
+                              Icons.close,
+                              color: Colors.white70,
+                            ),
                             onPressed: () => Navigator.of(ctx).pop(),
                           ),
                         ],
@@ -2269,7 +2593,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   color: const Color(0xFF00D9FF).withOpacity(0.2),
                   borderRadius: BorderRadius.circular(14),
                 ),
-                child: const Icon(Icons.pets, color: Color(0xFF00D9FF), size: 28),
+                child: const Icon(
+                  Icons.pets,
+                  color: Color(0xFF00D9FF),
+                  size: 28,
+                ),
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -2293,7 +2621,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: const Color(0xFF00D9FF).withOpacity(0.2),
                   borderRadius: BorderRadius.circular(20),
@@ -2310,7 +2641,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ],
           ),
           const SizedBox(height: 16),
-          const Text('Bond level', style: TextStyle(color: Colors.white70, fontSize: 13)),
+          const Text(
+            'Bond level',
+            style: TextStyle(color: Colors.white70, fontSize: 13),
+          ),
           const SizedBox(height: 8),
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
@@ -2345,9 +2679,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             children: [
               Icon(icon, color: const Color(0xFF00D9FF), size: 22),
               const SizedBox(height: 8),
-              Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+              Text(
+                value,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 15,
+                ),
+              ),
               const SizedBox(height: 2),
-              Text(label, style: const TextStyle(color: Colors.white54, fontSize: 11)),
+              Text(
+                label,
+                style: const TextStyle(color: Colors.white54, fontSize: 11),
+              ),
             ],
           ),
         ),
@@ -2366,8 +2710,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildAnalogReminderClock(DateTime now, {double size = 128}) {
-    final minuteAngle = (2 * math.pi) * ((now.minute + now.second / 60.0) / 60.0);
-    final hourAngle = (2 * math.pi) * (((now.hour % 12) + now.minute / 60.0) / 12.0);
+    final minuteAngle =
+        (2 * math.pi) * ((now.minute + now.second / 60.0) / 60.0);
+    final hourAngle =
+        (2 * math.pi) * (((now.hour % 12) + now.minute / 60.0) / 12.0);
     final secondAngle = (2 * math.pi) * (now.second / 60.0);
 
     return Container(
@@ -2382,7 +2728,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ],
           stops: const [0.18, 1.0],
         ),
-        border: Border.all(color: const Color(0xFF00D9FF).withOpacity(0.55), width: 1.4),
+        border: Border.all(
+          color: const Color(0xFF00D9FF).withOpacity(0.55),
+          width: 1.4,
+        ),
         boxShadow: [
           BoxShadow(
             color: const Color(0xFF00D9FF).withOpacity(0.25),
@@ -2410,9 +2759,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 ),
               ),
             ),
-          _clockHand(angle: hourAngle, length: size * 0.24, thickness: 3.2, color: Colors.white),
-          _clockHand(angle: minuteAngle, length: size * 0.34, thickness: 2.4, color: const Color(0xFF9FEFFF)),
-          _clockHand(angle: secondAngle, length: size * 0.38, thickness: 1.3, color: const Color(0xFFFFB74D)),
+          _clockHand(
+            angle: hourAngle,
+            length: size * 0.24,
+            thickness: 3.2,
+            color: Colors.white,
+          ),
+          _clockHand(
+            angle: minuteAngle,
+            length: size * 0.34,
+            thickness: 2.4,
+            color: const Color(0xFF9FEFFF),
+          ),
+          _clockHand(
+            angle: secondAngle,
+            length: size * 0.38,
+            thickness: 1.3,
+            color: const Color(0xFFFFB74D),
+          ),
           Container(
             width: 10,
             height: 10,
@@ -2472,14 +2836,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   color: Colors.white.withOpacity(0.05),
                   borderRadius: BorderRadius.circular(14),
                   border: Border.all(
-                    color: unlocked ? const Color(0xFF00D9FF).withOpacity(0.4) : Colors.white12,
+                    color: unlocked
+                        ? const Color(0xFF00D9FF).withOpacity(0.4)
+                        : Colors.white12,
                   ),
                 ),
                 child: Row(
                   children: [
                     Icon(
                       e.$2,
-                      color: unlocked ? const Color(0xFF00D9FF) : Colors.white30,
+                      color: unlocked
+                          ? const Color(0xFF00D9FF)
+                          : Colors.white30,
                       size: 26,
                     ),
                     const SizedBox(width: 10),
@@ -2496,7 +2864,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           ),
                           Text(
                             unlocked ? 'Equipped' : 'Locked · 500 pts',
-                            style: TextStyle(color: unlocked ? Colors.white54 : Colors.white30, fontSize: 11),
+                            style: TextStyle(
+                              color: unlocked ? Colors.white54 : Colors.white30,
+                              fontSize: 11,
+                            ),
                           ),
                         ],
                       ),
@@ -2530,15 +2901,31 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ),
             child: Row(
               children: [
-                const Icon(Icons.lock_open_outlined, color: Color(0xFF00D9FF), size: 20),
+                const Icon(
+                  Icons.lock_open_outlined,
+                  color: Color(0xFF00D9FF),
+                  size: 20,
+                ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(r.$1, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                      Text(
+                        r.$1,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                       const SizedBox(height: 2),
-                      Text(r.$2, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                      Text(
+                        r.$2,
+                        style: const TextStyle(
+                          color: Colors.white54,
+                          fontSize: 12,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -2594,36 +2981,36 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     ),
                   )
                 : _babyDragonController.value.hasError
-                    ? _unsupportedVideoFallback(compact: false)
-                    : _babyDragonController.value.isInitialized
-                        ? AspectRatio(
-                            aspectRatio: _babyDragonController.value.aspectRatio,
-                            child: Stack(
-                              fit: StackFit.expand,
-                              children: [
-                                Positioned.fill(
-                                  child: IgnorePointer(
-                                    ignoring: true,
-                                    child: VideoPlayer(_babyDragonController),
-                                  ),
-                                ),
-                                // Opaque to hit-testing so the parent scroll view receives drags
-                                // (IgnorePointer on the texture alone can leave "nothing" to hit).
-                                Positioned.fill(
-                                  child: Listener(
-                                    behavior: HitTestBehavior.translucent,
-                                    child: const SizedBox.expand(),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          )
-                        : const Center(
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2.5,
-                              color: cyan,
-                            ),
+                ? _unsupportedVideoFallback(compact: false)
+                : _babyDragonController.value.isInitialized
+                ? AspectRatio(
+                    aspectRatio: _babyDragonController.value.aspectRatio,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            ignoring: true,
+                            child: VideoPlayer(_babyDragonController),
                           ),
+                        ),
+                        // Opaque to hit-testing so the parent scroll view receives drags
+                        // (IgnorePointer on the texture alone can leave "nothing" to hit).
+                        Positioned.fill(
+                          child: Listener(
+                            behavior: HitTestBehavior.translucent,
+                            child: const SizedBox.expand(),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : const Center(
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.5,
+                      color: cyan,
+                    ),
+                  ),
           ),
         ),
       ),
@@ -2661,11 +3048,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               const SizedBox(height: 4),
               Text(
                 "Points & level from your latest check-ins.",
-                style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12),
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.6),
+                  fontSize: 12,
+                ),
               ),
               const SizedBox(height: 12),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.white.withOpacity(0.05),
                   borderRadius: BorderRadius.circular(14),
@@ -2679,7 +3072,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         shape: BoxShape.circle,
                         color: const Color(0xFF00D9FF).withOpacity(0.2),
                       ),
-                      child: const Icon(Icons.person, size: 20, color: Color(0xFF00D9FF)),
+                      child: const Icon(
+                        Icons.person,
+                        size: 20,
+                        color: Color(0xFF00D9FF),
+                      ),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
@@ -2696,7 +3093,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           const SizedBox(height: 2),
                           Text(
                             '$activeHabits active habit${activeHabits == 1 ? '' : 's'} · $totalCheckIns total check-ins',
-                            style: const TextStyle(color: Colors.white60, fontSize: 12),
+                            style: const TextStyle(
+                              color: Colors.white60,
+                              fontSize: 12,
+                            ),
                           ),
                         ],
                       ),
@@ -2713,7 +3113,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         ),
                         Text(
                           'Level $lvl',
-                          style: const TextStyle(color: Colors.white70, fontSize: 12),
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12,
+                          ),
                         ),
                       ],
                     ),
@@ -2742,17 +3145,37 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('No habits yet', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+              const Text(
+                'No habits yet',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
               const SizedBox(height: 8),
               Text(
                 'Tap + for the activity wheel — pick a preset or tap Custom to type your habit (name, category, notes, repeat). Tap a card to mark today done.',
-                style: TextStyle(color: Colors.white.withOpacity(0.65), fontSize: 13, height: 1.35),
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.65),
+                  fontSize: 13,
+                  height: 1.35,
+                ),
               ),
               const SizedBox(height: 14),
               TextButton.icon(
                 onPressed: _openActivityRadialMenu,
-                icon: const Icon(Icons.add_circle_outline, color: Color(0xFF00D9FF)),
-                label: const Text('Add habit', style: TextStyle(color: Color(0xFF00D9FF), fontWeight: FontWeight.w700)),
+                icon: const Icon(
+                  Icons.add_circle_outline,
+                  color: Color(0xFF00D9FF),
+                ),
+                label: const Text(
+                  'Add habit',
+                  style: TextStyle(
+                    color: Color(0xFF00D9FF),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
               ),
             ],
           ),
@@ -2795,11 +3218,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             context: context,
             builder: (ctx) => AlertDialog(
               backgroundColor: const Color(0xFF1A1B3A),
-              title: const Text('Remove habit?', style: TextStyle(color: Colors.white)),
-              content: Text('Delete “${h.title}” and its history?', style: TextStyle(color: Colors.white.withOpacity(0.8))),
+              title: const Text(
+                'Remove habit?',
+                style: TextStyle(color: Colors.white),
+              ),
+              content: Text(
+                'Delete “${h.title}” and its history?',
+                style: TextStyle(color: Colors.white.withOpacity(0.8)),
+              ),
               actions: [
-                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-                TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Delete'),
+                ),
               ],
             ),
           );
@@ -2855,9 +3290,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                   begin: Alignment.topCenter,
                                   end: Alignment.bottomCenter,
                                   colors: [
-                                    Color.lerp(categoryTint, Colors.white, 0.42)!,
+                                    Color.lerp(
+                                      categoryTint,
+                                      Colors.white,
+                                      0.42,
+                                    )!,
                                     categoryTint,
-                                    Color.lerp(categoryTint, Colors.black, 0.38)!,
+                                    Color.lerp(
+                                      categoryTint,
+                                      Colors.black,
+                                      0.38,
+                                    )!,
                                   ],
                                 )
                               : null,
@@ -2912,7 +3355,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               ),
                               child: Icon(
                                 icon,
-                                color: Color.lerp(Colors.white, categoryTint, 0.15),
+                                color: Color.lerp(
+                                  Colors.white,
+                                  categoryTint,
+                                  0.15,
+                                ),
                                 size: 32,
                               ),
                             ),
@@ -2972,7 +3419,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                     : null,
                               ),
                               child: done
-                                  ? const Icon(Icons.check_rounded, color: Colors.white, size: 26)
+                                  ? const Icon(
+                                      Icons.check_rounded,
+                                      color: Colors.white,
+                                      size: 26,
+                                    )
                                   : null,
                             ),
                           ],
@@ -3082,7 +3533,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         decoration: BoxDecoration(
           color: const Color(0xFF1A1B3A),
           borderRadius: BorderRadius.circular(30),
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.4), blurRadius: 20, offset: const Offset(0, 10))],
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.4),
+              blurRadius: 20,
+              offset: const Offset(0, 10),
+            ),
+          ],
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -3090,9 +3547,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             _navItem(Icons.home, "Home", true),
             _navItem(Icons.pie_chart, "stats", false, onTap: _showStatsPanel),
             const SizedBox(width: 50),
-            _navItem(Icons.calendar_today, "Calendar", false, onTap: _showCalendarPanel),
             _navItem(
-              isSocialLocked ? Icons.lock_outline_rounded : Icons.groups_rounded,
+              Icons.calendar_today,
+              "Calendar",
+              false,
+              onTap: _showCalendarPanel,
+            ),
+            _navItem(
+              isSocialLocked
+                  ? Icons.lock_outline_rounded
+                  : Icons.groups_rounded,
               "Social",
               false,
               onTap: _onSocialNavTap,
@@ -3103,7 +3567,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _navItem(IconData icon, String label, bool isActive, {VoidCallback? onTap}) {
+  Widget _navItem(
+    IconData icon,
+    String label,
+    bool isActive, {
+    VoidCallback? onTap,
+  }) {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(14),
@@ -3112,9 +3581,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, color: isActive ? const Color(0xFF00D9FF) : Colors.white),
+            Icon(
+              icon,
+              color: isActive ? const Color(0xFF00D9FF) : Colors.white,
+            ),
             const SizedBox(height: 4),
-            Text(label, style: TextStyle(color: isActive ? const Color(0xFF00D9FF) : Colors.white, fontSize: 12))
+            Text(
+              label,
+              style: TextStyle(
+                color: isActive ? const Color(0xFF00D9FF) : Colors.white,
+                fontSize: 12,
+              ),
+            ),
           ],
         ),
       ),
@@ -3156,7 +3634,11 @@ class _CalendarOrbitSheetState extends State<_CalendarOrbitSheet> {
 
   void _changeMonth(int delta) {
     setState(() {
-      _visibleMonth = DateTime(_visibleMonth.year, _visibleMonth.month + delta, 1);
+      _visibleMonth = DateTime(
+        _visibleMonth.year,
+        _visibleMonth.month + delta,
+        1,
+      );
     });
   }
 
@@ -3166,10 +3648,14 @@ class _CalendarOrbitSheetState extends State<_CalendarOrbitSheet> {
     final monthLabel = _monthName(_visibleMonth.month);
     final firstWeekday = _visibleMonth.weekday; // Mon=1
     final leading = firstWeekday - 1;
-    final daysInMonth = DateUtils.getDaysInMonth(_visibleMonth.year, _visibleMonth.month);
+    final daysInMonth = DateUtils.getDaysInMonth(
+      _visibleMonth.year,
+      _visibleMonth.month,
+    );
     final totalCells = ((leading + daysInMonth + 6) ~/ 7) * 7;
-    final selectedEvents =
-        _selectedDay == null ? const <String>[] : HabitStore.instance.dayLabels(_selectedDay!);
+    final selectedEvents = _selectedDay == null
+        ? const <String>[]
+        : HabitStore.instance.dayLabels(_selectedDay!);
 
     return Container(
       decoration: BoxDecoration(
@@ -3205,17 +3691,31 @@ class _CalendarOrbitSheetState extends State<_CalendarOrbitSheet> {
               const Expanded(
                 child: Text(
                   'Calendar Orbit',
-                  style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800),
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: accent.withOpacity(0.12),
                   border: Border.all(color: accent.withOpacity(0.5)),
                   borderRadius: BorderRadius.circular(999),
                 ),
-                child: const Text('Plan+Track', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 11)),
+                child: const Text(
+                  'Plan+Track',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 11,
+                  ),
+                ),
               ),
             ],
           ),
@@ -3224,7 +3724,9 @@ class _CalendarOrbitSheetState extends State<_CalendarOrbitSheet> {
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(18),
-              gradient: const LinearGradient(colors: [Color(0xFF1B2742), Color(0xFF142035)]),
+              gradient: const LinearGradient(
+                colors: [Color(0xFF1B2742), Color(0xFF142035)],
+              ),
             ),
             child: Column(
               children: [
@@ -3238,12 +3740,19 @@ class _CalendarOrbitSheetState extends State<_CalendarOrbitSheet> {
                       child: Text(
                         '$monthLabel ${_visibleMonth.year}',
                         textAlign: TextAlign.center,
-                        style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
                     IconButton(
                       onPressed: () => _changeMonth(1),
-                      icon: const Icon(Icons.chevron_right, color: Colors.white),
+                      icon: const Icon(
+                        Icons.chevron_right,
+                        color: Colors.white,
+                      ),
                     ),
                   ],
                 ),
@@ -3275,21 +3784,32 @@ class _CalendarOrbitSheetState extends State<_CalendarOrbitSheet> {
                     if (dayNum < 1 || dayNum > daysInMonth) {
                       return const SizedBox.shrink();
                     }
-                    final day = DateTime(_visibleMonth.year, _visibleMonth.month, dayNum);
+                    final day = DateTime(
+                      _visibleMonth.year,
+                      _visibleMonth.month,
+                      dayNum,
+                    );
                     final isToday = DateUtils.isSameDay(day, DateTime.now());
-                    final isSelected = _selectedDay != null && DateUtils.isSameDay(_selectedDay!, day);
-                    final hasEvent = HabitStore.instance.countCompletedOn(day) > 0;
+                    final isSelected =
+                        _selectedDay != null &&
+                        DateUtils.isSameDay(_selectedDay!, day);
+                    final hasEvent =
+                        HabitStore.instance.countCompletedOn(day) > 0;
                     return InkWell(
                       borderRadius: BorderRadius.circular(11),
                       onTap: () => setState(() => _selectedDay = day),
                       child: Container(
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(11),
-                          color: isSelected ? accent.withOpacity(0.2) : Colors.white.withOpacity(0.04),
+                          color: isSelected
+                              ? accent.withOpacity(0.2)
+                              : Colors.white.withOpacity(0.04),
                           border: Border.all(
                             color: isSelected
                                 ? accent
-                                : (isToday ? const Color(0xFFFF8A00).withOpacity(0.7) : Colors.white10),
+                                : (isToday
+                                      ? const Color(0xFFFF8A00).withOpacity(0.7)
+                                      : Colors.white10),
                           ),
                         ),
                         child: Stack(
@@ -3299,7 +3819,9 @@ class _CalendarOrbitSheetState extends State<_CalendarOrbitSheet> {
                                 '$dayNum',
                                 style: TextStyle(
                                   color: Colors.white.withOpacity(0.95),
-                                  fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                                  fontWeight: isSelected
+                                      ? FontWeight.w800
+                                      : FontWeight.w600,
                                 ),
                               ),
                             ),
@@ -3343,13 +3865,20 @@ class _CalendarOrbitSheetState extends State<_CalendarOrbitSheet> {
                   _selectedDay == null
                       ? 'Selected Day'
                       : '${_selectedDay!.day} ${_monthName(_selectedDay!.month)} ${_selectedDay!.year}',
-                  style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 if (selectedEvents.isEmpty)
                   Text(
                     'No habit check-ins logged this day. Complete habits from Home — they appear here.',
-                    style: TextStyle(color: Colors.white.withOpacity(0.62), fontSize: 12),
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.62),
+                      fontSize: 12,
+                    ),
                   )
                 else
                   ...selectedEvents.map(
@@ -3360,13 +3889,20 @@ class _CalendarOrbitSheetState extends State<_CalendarOrbitSheet> {
                         children: [
                           const Padding(
                             padding: EdgeInsets.only(top: 5),
-                            child: Icon(Icons.fiber_manual_record, size: 8, color: Color(0xFF00D9FF)),
+                            child: Icon(
+                              Icons.fiber_manual_record,
+                              size: 8,
+                              color: Color(0xFF00D9FF),
+                            ),
                           ),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
                               e,
-                              style: TextStyle(color: Colors.white.withOpacity(0.88), fontSize: 13),
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(0.88),
+                                fontSize: 13,
+                              ),
                             ),
                           ),
                         ],
@@ -3393,7 +3929,11 @@ class _WeekTag extends StatelessWidget {
       child: Text(
         text,
         textAlign: TextAlign.center,
-        style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 11, fontWeight: FontWeight.w700),
+        style: TextStyle(
+          color: Colors.white.withOpacity(0.5),
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
   }
@@ -3428,7 +3968,8 @@ class _StatsInsightSheet extends StatefulWidget {
   State<_StatsInsightSheet> createState() => _StatsInsightSheetState();
 }
 
-class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTickerProviderStateMixin {
+class _StatsInsightSheetState extends State<_StatsInsightSheet>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _sweep;
 
   static const _mint = Color(0xFF5DFFC4);
@@ -3438,7 +3979,10 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
   @override
   void initState() {
     super.initState();
-    _sweep = AnimationController(vsync: this, duration: const Duration(seconds: 4))..repeat();
+    _sweep = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 4),
+    )..repeat();
     HabitStore.instance.addListener(_onHabits);
   }
 
@@ -3454,7 +3998,9 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
   void _showPulseHistory() {
     final s = HabitStore.instance;
     final counts = s.last7DayCheckinCounts();
-    final avgPerDay = counts.isEmpty ? 0.0 : counts.reduce((a, b) => a + b) / counts.length;
+    final avgPerDay = counts.isEmpty
+        ? 0.0
+        : counts.reduce((a, b) => a + b) / counts.length;
     final now = DateTime.now();
 
     showModalBottomSheet<void>(
@@ -3485,22 +4031,34 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
               const SizedBox(height: 14),
               const Text(
                 'My pulse history',
-                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
               const SizedBox(height: 4),
               Text(
                 'Previous 7 days snapshot',
-                style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12),
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.6),
+                  fontSize: 12,
+                ),
               ),
               const SizedBox(height: 14),
               ...List<Widget>.generate(7, (i) {
                 final day = now.subtract(Duration(days: 6 - i));
                 final c = counts[i];
-                final percent = s.habits.isEmpty ? 0 : ((c / s.habits.length) * 100).round();
+                final percent = s.habits.isEmpty
+                    ? 0
+                    : ((c / s.habits.length) * 100).round();
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 9,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.white.withOpacity(0.03),
                       borderRadius: BorderRadius.circular(12),
@@ -3523,12 +4081,20 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
                         Expanded(
                           child: Text(
                             '$percent% completion',
-                            style: TextStyle(color: _mint.withOpacity(0.9), fontSize: 12, fontWeight: FontWeight.w600),
+                            style: TextStyle(
+                              color: _mint.withOpacity(0.9),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                         ),
                         Text(
                           '$c hits',
-                          style: TextStyle(color: Colors.white.withOpacity(0.75), fontSize: 12, fontWeight: FontWeight.w600),
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.75),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       ],
                     ),
@@ -3538,7 +4104,11 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
               const SizedBox(height: 4),
               Text(
                 'Avg ${avgPerDay.toStringAsFixed(avgPerDay >= 10 ? 0 : 1)} check-ins/day · Current streak ${s.currentStreak} days',
-                style: TextStyle(color: Colors.white.withOpacity(0.62), fontSize: 11, fontWeight: FontWeight.w600),
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.62),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ],
           ),
@@ -3558,16 +4128,16 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [
-            const Color(0xFF0E1A32),
-            _deep,
-            const Color(0xFF060A12),
-          ],
+          colors: [const Color(0xFF0E1A32), _deep, const Color(0xFF060A12)],
         ),
         borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
         border: Border.all(color: _mint.withOpacity(0.22)),
         boxShadow: [
-          BoxShadow(color: _violet.withOpacity(0.15), blurRadius: 40, offset: const Offset(0, -12)),
+          BoxShadow(
+            color: _violet.withOpacity(0.15),
+            blurRadius: 40,
+            offset: const Offset(0, -12),
+          ),
         ],
       ),
       child: Stack(
@@ -3581,7 +4151,9 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
                 height: 200,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  gradient: RadialGradient(colors: [_mint.withOpacity(0.12), Colors.transparent]),
+                  gradient: RadialGradient(
+                    colors: [_mint.withOpacity(0.12), Colors.transparent],
+                  ),
                 ),
               ),
             ),
@@ -3639,20 +4211,33 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
                     onTap: _showPulseHistory,
                     borderRadius: BorderRadius.circular(12),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.white.withOpacity(0.12)),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.12),
+                        ),
                         color: const Color(0xFF152238).withOpacity(0.9),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.history_rounded, size: 16, color: _violet.withOpacity(0.9)),
+                          Icon(
+                            Icons.history_rounded,
+                            size: 16,
+                            color: _violet.withOpacity(0.9),
+                          ),
                           const SizedBox(width: 6),
                           Text(
                             'My history',
-                            style: TextStyle(color: Colors.white.withOpacity(0.85), fontSize: 12, fontWeight: FontWeight.w600),
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.85),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                         ],
                       ),
@@ -3687,7 +4272,10 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
                                   fontWeight: FontWeight.w200,
                                   height: 1,
                                   shadows: [
-                                    Shadow(color: _mint.withOpacity(0.5), blurRadius: 24),
+                                    Shadow(
+                                      color: _mint.withOpacity(0.5),
+                                      blurRadius: 24,
+                                    ),
                                   ],
                                 ),
                               ),
@@ -3704,7 +4292,11 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
                               const SizedBox(height: 6),
                               Text(
                                 s.trendLabel(),
-                                style: TextStyle(color: _mint.withOpacity(0.9), fontSize: 11, fontWeight: FontWeight.w600),
+                                style: TextStyle(
+                                  color: _mint.withOpacity(0.9),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
                                 textAlign: TextAlign.center,
                               ),
                             ],
@@ -3718,11 +4310,32 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
               const SizedBox(height: 8),
               Row(
                 children: [
-                  Expanded(child: _statGlassTile('Streak', '${s.currentStreak}', 'days', Icons.local_fire_department)),
+                  Expanded(
+                    child: _statGlassTile(
+                      'Streak',
+                      '${s.currentStreak}',
+                      'days',
+                      Icons.local_fire_department,
+                    ),
+                  ),
                   const SizedBox(width: 10),
-                  Expanded(child: _statGlassTile('Done today', '$completedToday', 'hits', Icons.check_circle_outline)),
+                  Expanded(
+                    child: _statGlassTile(
+                      'Done today',
+                      '$completedToday',
+                      'hits',
+                      Icons.check_circle_outline,
+                    ),
+                  ),
                   const SizedBox(width: 10),
-                  Expanded(child: _statGlassTile('Check-ins', '${s.totalCompletions}', 'all', Icons.hourglass_top)),
+                  Expanded(
+                    child: _statGlassTile(
+                      'Check-ins',
+                      '${s.totalCompletions}',
+                      'all',
+                      Icons.hourglass_top,
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 22),
@@ -3737,7 +4350,11 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
               Text(
                 'Green = lighter day   ·   Red = you did more',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white.withOpacity(0.42), fontSize: 10, fontWeight: FontWeight.w600),
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.42),
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
               const SizedBox(height: 22),
               _sectionLabel('SPLIT', Icons.pie_chart_outline),
@@ -3770,7 +4387,12 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
     );
   }
 
-  Widget _statGlassTile(String label, String value, String unit, IconData icon) {
+  Widget _statGlassTile(
+    String label,
+    String value,
+    String unit,
+    IconData icon,
+  ) {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
       decoration: BoxDecoration(
@@ -3796,16 +4418,32 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
             children: [
               Text(
                 value,
-                style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
               const SizedBox(width: 2),
-              Text(unit, style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 10, fontWeight: FontWeight.w600)),
+              Text(
+                unit,
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.45),
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 4),
           Text(
             label,
-            style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 0.8),
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.45),
+              fontSize: 9,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+            ),
           ),
         ],
       ),
@@ -3836,7 +4474,9 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
   Widget _momentumStrip() {
     final counts = HabitStore.instance.last7DayCheckinCounts();
     final maxCount = counts.fold<int>(0, (m, v) => v > m ? v : m);
-    final avgPerDay = counts.isEmpty ? 0.0 : counts.reduce((a, b) => a + b) / counts.length;
+    final avgPerDay = counts.isEmpty
+        ? 0.0
+        : counts.reduce((a, b) => a + b) / counts.length;
     final today = DateTime.now();
     final labels = List<String>.generate(7, (i) {
       final d = today.subtract(Duration(days: 6 - i));
@@ -3855,10 +4495,20 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Daily completion', style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 11)),
+              Text(
+                'Daily completion',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.5),
+                  fontSize: 11,
+                ),
+              ),
               Text(
                 'avg ${avgPerDay.toStringAsFixed(avgPerDay >= 10 ? 0 : 1)} check-ins/day',
-                style: TextStyle(color: _mint.withOpacity(0.9), fontSize: 11, fontWeight: FontWeight.w700),
+                style: TextStyle(
+                  color: _mint.withOpacity(0.9),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ],
           ),
@@ -3866,7 +4516,9 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: List.generate(7, (i) {
-              final normalized = maxCount == 0 ? 0.0 : (counts[i] / maxCount).clamp(0.0, 1.0);
+              final normalized = maxCount == 0
+                  ? 0.0
+                  : (counts[i] / maxCount).clamp(0.0, 1.0);
               final h = counts[i] == 0 ? 2.0 : math.max(8.0, 56.0 * normalized);
               return Expanded(
                 child: Padding(
@@ -3886,11 +4538,24 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
                               _mint.withOpacity(0.45 + 0.35 * normalized),
                             ],
                           ),
-                          boxShadow: [BoxShadow(color: _mint.withOpacity(0.15), blurRadius: 8, offset: const Offset(0, 2))],
+                          boxShadow: [
+                            BoxShadow(
+                              color: _mint.withOpacity(0.15),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
                         ),
                       ),
                       const SizedBox(height: 6),
-                      Text(labels[i], style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 10, fontWeight: FontWeight.w600)),
+                      Text(
+                        labels[i],
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.4),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -3923,13 +4588,14 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: hub.withOpacity(0.35 + 0.25 * t)),
                   gradient: RadialGradient(
-                    colors: [
-                      hub.withOpacity(glow),
-                      const Color(0xFF0D1526),
-                    ],
+                    colors: [hub.withOpacity(glow), const Color(0xFF0D1526)],
                   ),
                   boxShadow: [
-                    BoxShadow(color: hub.withOpacity(0.12 + 0.2 * t), blurRadius: 10, spreadRadius: 0),
+                    BoxShadow(
+                      color: hub.withOpacity(0.12 + 0.2 * t),
+                      blurRadius: 10,
+                      spreadRadius: 0,
+                    ),
                   ],
                 ),
               ),
@@ -3943,15 +4609,40 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
   Widget _categorySplit() {
     final fr = HabitStore.instance.categoryCompletionFractionsLast7();
     final items = <(String, IconData, double, Color)>[
-      ('Focus', Icons.center_focus_strong, fr['focus'] ?? 0, const Color(0xFF5DFFC4)),
+      (
+        'Focus',
+        Icons.center_focus_strong,
+        fr['focus'] ?? 0,
+        const Color(0xFF5DFFC4),
+      ),
       ('Move', Icons.directions_run, fr['move'] ?? 0, const Color(0xFF7AB6FF)),
       ('Mind', Icons.spa_outlined, fr['mind'] ?? 0, const Color(0xFF9D7DFF)),
       ('Learn', Icons.menu_book, fr['learn'] ?? 0, const Color(0xFFFFB86A)),
       ('Gym', Icons.fitness_center, fr['gym'] ?? 0, const Color(0xFFFF6B8A)),
-      ('Nutrition', Icons.restaurant_menu, fr['nutrition'] ?? 0, const Color(0xFF6BCB77)),
-      ('Sleep', Icons.bedtime_outlined, fr['sleep'] ?? 0, const Color(0xFFB388FF)),
-      ('Social', Icons.groups_outlined, fr['social'] ?? 0, const Color(0xFFFFAB40)),
-      ('Creative', Icons.palette_outlined, fr['creative'] ?? 0, const Color(0xFFFF7AD9)),
+      (
+        'Nutrition',
+        Icons.restaurant_menu,
+        fr['nutrition'] ?? 0,
+        const Color(0xFF6BCB77),
+      ),
+      (
+        'Sleep',
+        Icons.bedtime_outlined,
+        fr['sleep'] ?? 0,
+        const Color(0xFFB388FF),
+      ),
+      (
+        'Social',
+        Icons.groups_outlined,
+        fr['social'] ?? 0,
+        const Color(0xFFFFAB40),
+      ),
+      (
+        'Creative',
+        Icons.palette_outlined,
+        fr['creative'] ?? 0,
+        const Color(0xFFFF7AD9),
+      ),
     ];
     return Column(
       children: [
@@ -3961,7 +4652,10 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
             padding: const EdgeInsets.only(bottom: 10),
             child: Text(
               'Based on last 7 days of check-ins',
-              style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 11),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.5),
+                fontSize: 11,
+              ),
             ),
           ),
         ),
@@ -3976,7 +4670,11 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
                   width: 68,
                   child: Text(
                     name,
-                    style: TextStyle(color: Colors.white.withOpacity(0.82), fontSize: 11, fontWeight: FontWeight.w700),
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.82),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -3996,8 +4694,15 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
                           height: 10,
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(99),
-                            gradient: LinearGradient(colors: [col.withOpacity(0.2), col]),
-                            boxShadow: [BoxShadow(color: col.withOpacity(0.35), blurRadius: 8)],
+                            gradient: LinearGradient(
+                              colors: [col.withOpacity(0.2), col],
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: col.withOpacity(0.35),
+                                blurRadius: 8,
+                              ),
+                            ],
                           ),
                         ),
                       ),
@@ -4010,7 +4715,11 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
                   child: Text(
                     '${(pct * 100).round()}%',
                     textAlign: TextAlign.right,
-                    style: TextStyle(color: Colors.white.withOpacity(0.85), fontSize: 12, fontWeight: FontWeight.w700),
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.85),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
               ],
@@ -4027,10 +4736,7 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: _mint.withOpacity(0.25)),
         gradient: LinearGradient(
-          colors: [
-            _mint.withOpacity(0.08),
-            _violet.withOpacity(0.06),
-          ],
+          colors: [_mint.withOpacity(0.08), _violet.withOpacity(0.06)],
         ),
       ),
       child: Row(
@@ -4042,7 +4748,11 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
               shape: BoxShape.circle,
               color: _violet.withOpacity(0.2),
             ),
-            child: Icon(Icons.auto_awesome, color: _mint.withOpacity(0.95), size: 22),
+            child: Icon(
+              Icons.auto_awesome,
+              color: _mint.withOpacity(0.95),
+              size: 22,
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -4051,12 +4761,21 @@ class _StatsInsightSheetState extends State<_StatsInsightSheet> with SingleTicke
               children: [
                 Text(
                   'Next win',
-                  style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.5),
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.45),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.5,
+                  ),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   HabitStore.instance.insightNudgeBody(),
-                  style: TextStyle(color: Colors.white.withOpacity(0.82), fontSize: 13, height: 1.35),
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.82),
+                    fontSize: 13,
+                    height: 1.35,
+                  ),
                 ),
               ],
             ),
@@ -4115,11 +4834,7 @@ class _StatsPulseRingPainter extends CustomPainter {
 
     final tick = -math.pi / 2 + 2 * math.pi * p * sweep;
     final dot = Offset(c.dx + r * math.cos(tick), c.dy + r * math.sin(tick));
-    canvas.drawCircle(
-      dot,
-      7,
-      Paint()..color = accent.withOpacity(0.95),
-    );
+    canvas.drawCircle(dot, 7, Paint()..color = accent.withOpacity(0.95));
     canvas.drawCircle(
       dot,
       12,
@@ -4147,7 +4862,8 @@ class _SocialArenaSheet extends StatefulWidget {
   State<_SocialArenaSheet> createState() => _SocialArenaSheetState();
 }
 
-class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProviderStateMixin {
+class _SocialArenaSheetState extends State<_SocialArenaSheet>
+    with TickerProviderStateMixin {
   late final AnimationController _pulse;
   late final AnimationController _blink;
 
@@ -4159,8 +4875,14 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
   @override
   void initState() {
     super.initState();
-    _pulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 2600))..repeat(reverse: true);
-    _blink = AnimationController(vsync: this, duration: const Duration(milliseconds: 720))..repeat(reverse: true);
+    _pulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2600),
+    )..repeat(reverse: true);
+    _blink = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 720),
+    )..repeat(reverse: true);
     HabitStore.instance.addListener(_onHabitData);
   }
 
@@ -4190,8 +4912,18 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
       child: Container(
         decoration: BoxDecoration(
           boxShadow: [
-            BoxShadow(color: _magenta.withOpacity(0.25), blurRadius: 40, spreadRadius: -4, offset: const Offset(-6, -4)),
-            BoxShadow(color: _cyan.withOpacity(0.2), blurRadius: 36, spreadRadius: -6, offset: const Offset(8, 0)),
+            BoxShadow(
+              color: _magenta.withOpacity(0.25),
+              blurRadius: 40,
+              spreadRadius: -4,
+              offset: const Offset(-6, -4),
+            ),
+            BoxShadow(
+              color: _cyan.withOpacity(0.2),
+              blurRadius: 36,
+              spreadRadius: -6,
+              offset: const Offset(8, 0),
+            ),
           ],
         ),
         child: Stack(
@@ -4202,11 +4934,7 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
                 gradient: LinearGradient(
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
-                  colors: [
-                    Color(0xFF120028),
-                    _voidBg,
-                    Color(0xFF0A1628),
-                  ],
+                  colors: [Color(0xFF120028), _voidBg, Color(0xFF0A1628)],
                   stops: [0.0, 0.45, 1.0],
                 ),
               ),
@@ -4264,10 +4992,17 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(3),
                       gradient: LinearGradient(
-                        colors: [_magenta.withOpacity(0.9), _cyan.withOpacity(0.9), _lime.withOpacity(0.85)],
+                        colors: [
+                          _magenta.withOpacity(0.9),
+                          _cyan.withOpacity(0.9),
+                          _lime.withOpacity(0.85),
+                        ],
                       ),
                       boxShadow: [
-                        BoxShadow(color: _cyan.withOpacity(0.5), blurRadius: 12),
+                        BoxShadow(
+                          color: _cyan.withOpacity(0.5),
+                          blurRadius: 12,
+                        ),
                       ],
                     ),
                   ),
@@ -4288,9 +5023,10 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
                               offset: const Offset(18, -6),
                               child: ShaderMask(
                                 blendMode: BlendMode.srcIn,
-                                shaderCallback: (bounds) => const LinearGradient(
-                                  colors: [_lime, _cyan],
-                                ).createShader(bounds),
+                                shaderCallback: (bounds) =>
+                                    const LinearGradient(
+                                      colors: [_lime, _cyan],
+                                    ).createShader(bounds),
                                 child: const Text(
                                   'ARENA',
                                   style: TextStyle(
@@ -4324,19 +5060,32 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
                         return Opacity(
                           opacity: o,
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 8,
+                            ),
                             decoration: BoxDecoration(
                               color: Colors.redAccent.withOpacity(0.22),
                               borderRadius: BorderRadius.circular(4),
-                              border: Border.all(color: Colors.redAccent.withOpacity(0.85), width: 1.5),
+                              border: Border.all(
+                                color: Colors.redAccent.withOpacity(0.85),
+                                width: 1.5,
+                              ),
                               boxShadow: [
-                                BoxShadow(color: Colors.redAccent.withOpacity(0.45), blurRadius: 14),
+                                BoxShadow(
+                                  color: Colors.redAccent.withOpacity(0.45),
+                                  blurRadius: 14,
+                                ),
                               ],
                             ),
                             child: const Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(Icons.fiber_manual_record, color: Colors.redAccent, size: 10),
+                                Icon(
+                                  Icons.fiber_manual_record,
+                                  color: Colors.redAccent,
+                                  size: 10,
+                                ),
                                 SizedBox(width: 6),
                                 Text(
                                   'LIVE',
@@ -4374,9 +5123,21 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
                   children: [
                     Expanded(child: _skewStat('#1', 'RANK', _magenta)),
                     const SizedBox(width: 10),
-                    Expanded(child: _skewStat(_formatPts(habit.totalPoints), 'POINTS', _cyan)),
+                    Expanded(
+                      child: _skewStat(
+                        _formatPts(habit.totalPoints),
+                        'POINTS',
+                        _cyan,
+                      ),
+                    ),
                     const SizedBox(width: 10),
-                    Expanded(child: _skewStat('${habit.totalCompletions}', 'DONE', _lime)),
+                    Expanded(
+                      child: _skewStat(
+                        '${habit.totalCompletions}',
+                        'DONE',
+                        _lime,
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 22),
@@ -4398,9 +5159,27 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
                   ],
                 ),
                 const SizedBox(height: 12),
-                _battleRow('Morning Movers', 'You vs 4 • focus sprint', '2H', Icons.directions_run, 0),
-                _battleRow('Mindful Crew', 'Meditation relay', 'TONIGHT', Icons.spa_outlined, 1),
-                _battleRow('Readers Club', 'Pages gauntlet', 'WKND', Icons.menu_book, 2),
+                _battleRow(
+                  'Morning Movers',
+                  'You vs 4 • focus sprint',
+                  '2H',
+                  Icons.directions_run,
+                  0,
+                ),
+                _battleRow(
+                  'Mindful Crew',
+                  'Meditation relay',
+                  'TONIGHT',
+                  Icons.spa_outlined,
+                  1,
+                ),
+                _battleRow(
+                  'Readers Club',
+                  'Pages gauntlet',
+                  'WKND',
+                  Icons.menu_book,
+                  2,
+                ),
                 const SizedBox(height: 22),
                 Row(
                   children: [
@@ -4422,12 +5201,19 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
                 const SizedBox(height: 6),
                 Text(
                   'Your score from habits on this device. Multiplayer ranks when you add an API.',
-                  style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11),
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.45),
+                    fontSize: 11,
+                  ),
                 ),
                 const SizedBox(height: 12),
                 ...List<Widget>.generate(leaderboardRows.length, (i) {
                   final row = leaderboardRows[i];
-                  return _leaderboardRow(rank: i + 1, name: row.name, points: row.points);
+                  return _leaderboardRow(
+                    rank: i + 1,
+                    name: row.name,
+                    points: row.points,
+                  );
                 }),
                 const SizedBox(height: 20),
                 const Text(
@@ -4446,8 +5232,14 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
                   children: const [
                     _ArenaDeployChip(icon: Icons.group_add, label: 'INVITE'),
                     _ArenaDeployChip(icon: Icons.emoji_events, label: 'DUEL'),
-                    _ArenaDeployChip(icon: Icons.chat_bubble_outline, label: 'SQUAD CHAT'),
-                    _ArenaDeployChip(icon: Icons.flag_outlined, label: 'SET GOAL'),
+                    _ArenaDeployChip(
+                      icon: Icons.chat_bubble_outline,
+                      label: 'SQUAD CHAT',
+                    ),
+                    _ArenaDeployChip(
+                      icon: Icons.flag_outlined,
+                      label: 'SET GOAL',
+                    ),
                   ],
                 ),
               ],
@@ -4462,8 +5254,22 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
     return Stack(
       clipBehavior: Clip.none,
       children: [
-        Positioned(left: 2, top: 1, child: Text(text, style: _titleStyle.copyWith(color: _magenta.withOpacity(0.65)))),
-        Positioned(left: -2, top: -1, child: Text(text, style: _titleStyle.copyWith(color: _cyan.withOpacity(0.7)))),
+        Positioned(
+          left: 2,
+          top: 1,
+          child: Text(
+            text,
+            style: _titleStyle.copyWith(color: _magenta.withOpacity(0.65)),
+          ),
+        ),
+        Positioned(
+          left: -2,
+          top: -1,
+          child: Text(
+            text,
+            style: _titleStyle.copyWith(color: _cyan.withOpacity(0.7)),
+          ),
+        ),
         Text(text, style: _titleStyle),
       ],
     );
@@ -4531,7 +5337,9 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
                 color: accent,
                 fontSize: 17,
                 fontWeight: FontWeight.w900,
-                shadows: [Shadow(color: accent.withOpacity(0.5), blurRadius: 10)],
+                shadows: [
+                  Shadow(color: accent.withOpacity(0.5), blurRadius: 10),
+                ],
               ),
             ),
             const SizedBox(height: 2),
@@ -4554,7 +5362,9 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
   Widget _ticketChallengeCard() {
     final s = HabitStore.instance;
     final tp = s.todayProgressFraction.clamp(0.0, 1.0);
-    final left = s.habits.where((h) => !s.isCompletedOn(h.id, DateTime.now())).length;
+    final left = s.habits
+        .where((h) => !s.isCompletedOn(h.id, DateTime.now()))
+        .length;
     return Container(
       decoration: BoxDecoration(
         color: const Color(0xE6160A24),
@@ -4566,14 +5376,20 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
         ),
         border: Border.all(color: _magenta.withOpacity(0.45), width: 1.2),
         boxShadow: [
-          BoxShadow(color: _magenta.withOpacity(0.2), blurRadius: 24, offset: const Offset(0, 8)),
+          BoxShadow(
+            color: _magenta.withOpacity(0.2),
+            blurRadius: 24,
+            offset: const Offset(0, 8),
+          ),
         ],
       ),
       child: Stack(
         children: [
           Positioned.fill(
             child: CustomPaint(
-              painter: _TicketPerforationPainter(color: Colors.white.withOpacity(0.12)),
+              painter: _TicketPerforationPainter(
+                color: Colors.white.withOpacity(0.12),
+              ),
             ),
           ),
           Padding(
@@ -4587,16 +5403,26 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
                     const SizedBox(width: 8),
                     ShaderMask(
                       blendMode: BlendMode.srcIn,
-                      shaderCallback: (b) => LinearGradient(colors: [_lime, _cyan]).createShader(b),
+                      shaderCallback: (b) => LinearGradient(
+                        colors: [_lime, _cyan],
+                      ).createShader(b),
                       child: const Text(
                         'TODAY',
-                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, letterSpacing: 2),
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 2,
+                        ),
                       ),
                     ),
                     const Spacer(),
                     Text(
                       'Resets midnight',
-                      style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 10, fontWeight: FontWeight.w700),
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.45),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ],
                 ),
@@ -4605,7 +5431,11 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
                   s.habits.isEmpty
                       ? 'Add habits from Home, then check them off to build your score.'
                       : 'Complete every habit today for a perfect day. $left habit${left == 1 ? '' : 's'} left.',
-                  style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.35),
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 13,
+                    height: 1.35,
+                  ),
                 ),
                 const SizedBox(height: 14),
                 ClipRRect(
@@ -4621,8 +5451,15 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
                         child: Container(
                           height: 10,
                           decoration: BoxDecoration(
-                            gradient: LinearGradient(colors: [_magenta, _cyan, _lime]),
-                            boxShadow: [BoxShadow(color: _cyan.withOpacity(0.6), blurRadius: 12)],
+                            gradient: LinearGradient(
+                              colors: [_magenta, _cyan, _lime],
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: _cyan.withOpacity(0.6),
+                                blurRadius: 12,
+                              ),
+                            ],
                           ),
                         ),
                       ),
@@ -4632,7 +5469,11 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
                 const SizedBox(height: 6),
                 Text(
                   '${(tp * 100).round()}% of today\'s habits done',
-                  style: TextStyle(color: _cyan.withOpacity(0.85), fontSize: 11, fontWeight: FontWeight.w700),
+                  style: TextStyle(
+                    color: _cyan.withOpacity(0.85),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ],
             ),
@@ -4642,7 +5483,11 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
     );
   }
 
-  Widget _leaderboardRow({required int rank, required String name, required int points}) {
+  Widget _leaderboardRow({
+    required int rank,
+    required String name,
+    required int points,
+  }) {
     Color rankAccent;
     if (rank == 1) {
       rankAccent = const Color(0xFFFFD54F);
@@ -4653,7 +5498,9 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
     } else {
       rankAccent = _cyan.withOpacity(0.65);
     }
-    final ptsLabel = points >= 1000 ? '${(points / 1000).toStringAsFixed(1)}K' : '$points';
+    final ptsLabel = points >= 1000
+        ? '${(points / 1000).toStringAsFixed(1)}K'
+        : '$points';
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Container(
@@ -4673,7 +5520,9 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
                   color: rankAccent,
                   fontWeight: FontWeight.w900,
                   fontSize: 13,
-                  shadows: [Shadow(color: rankAccent.withOpacity(0.4), blurRadius: 8)],
+                  shadows: [
+                    Shadow(color: rankAccent.withOpacity(0.4), blurRadius: 8),
+                  ],
                 ),
               ),
             ),
@@ -4718,7 +5567,13 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
     );
   }
 
-  Widget _battleRow(String title, String subtitle, String badge, IconData icon, int index) {
+  Widget _battleRow(
+    String title,
+    String subtitle,
+    String badge,
+    IconData icon,
+    int index,
+  ) {
     final tilt = index.isEven ? 0.018 : -0.018;
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -4735,9 +5590,22 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
             ),
             borderRadius: BorderRadius.circular(6),
             border: Border(
-              left: BorderSide(color: index == 0 ? _magenta : index == 1 ? _cyan : _lime, width: 4),
+              left: BorderSide(
+                color: index == 0
+                    ? _magenta
+                    : index == 1
+                    ? _cyan
+                    : _lime,
+                width: 4,
+              ),
             ),
-            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.4), blurRadius: 12, offset: const Offset(4, 4))],
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.4),
+                blurRadius: 12,
+                offset: const Offset(4, 4),
+              ),
+            ],
           ),
           child: Row(
             children: [
@@ -4758,17 +5626,30 @@ class _SocialArenaSheetState extends State<_SocialArenaSheet> with TickerProvide
                   children: [
                     Text(
                       title,
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 14,
+                      ),
                     ),
                     const SizedBox(height: 2),
-                    Text(subtitle, style: TextStyle(color: Colors.white.withOpacity(0.55), fontSize: 12)),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.55),
+                        fontSize: 12,
+                      ),
+                    ),
                   ],
                 ),
               ),
               Transform.rotate(
                 angle: math.pi / 2,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
                   color: _lime.withOpacity(0.15),
                   child: Text(
                     badge,
@@ -4810,7 +5691,11 @@ class _ArenaDeployChip extends StatelessWidget {
             borderRadius: BorderRadius.circular(2),
             border: Border.all(color: cyan.withOpacity(0.4)),
             boxShadow: [
-              BoxShadow(color: Colors.black.withOpacity(0.5), offset: const Offset(3, 4), blurRadius: 0),
+              BoxShadow(
+                color: Colors.black.withOpacity(0.5),
+                offset: const Offset(3, 4),
+                blurRadius: 0,
+              ),
             ],
           ),
           child: Padding(
@@ -4869,23 +5754,36 @@ class _ArenaGridPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final c1 = Color.lerp(const Color(0x33FF00C8), const Color(0x3300F5FF), phase)!;
+    final c1 = Color.lerp(
+      const Color(0x33FF00C8),
+      const Color(0x3300F5FF),
+      phase,
+    )!;
     final paint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1;
 
     for (double x = -size.height; x < size.width + size.height; x += 32) {
       paint.color = c1.withOpacity(0.08 + 0.06 * phase);
-      canvas.drawLine(Offset(x, 0), Offset(x + size.height * 0.85, size.height), paint);
+      canvas.drawLine(
+        Offset(x, 0),
+        Offset(x + size.height * 0.85, size.height),
+        paint,
+      );
     }
     for (double y = 0; y < size.height; y += 40) {
       paint.color = const Color(0x22FFFFFF);
-      canvas.drawLine(Offset(0, y + phase * 20), Offset(size.width, y + phase * 20), paint);
+      canvas.drawLine(
+        Offset(0, y + phase * 20),
+        Offset(size.width, y + phase * 20),
+        paint,
+      );
     }
   }
 
   @override
-  bool shouldRepaint(covariant _ArenaGridPainter oldDelegate) => oldDelegate.phase != phase;
+  bool shouldRepaint(covariant _ArenaGridPainter oldDelegate) =>
+      oldDelegate.phase != phase;
 }
 
 class _TicketPerforationPainter extends CustomPainter {
@@ -4903,7 +5801,8 @@ class _TicketPerforationPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _TicketPerforationPainter oldDelegate) => oldDelegate.color != color;
+  bool shouldRepaint(covariant _TicketPerforationPainter oldDelegate) =>
+      oldDelegate.color != color;
 }
 
 String _habitTeacherReply(String userMessage) {
@@ -4915,7 +5814,10 @@ String _habitTeacherReply(String userMessage) {
     return "Streaks reward showing up, not being perfect. If you miss a day, restart the next day with a "
         "smaller version of the habit so it still feels easy to win.";
   }
-  if (s.contains('motivat') || s.contains('lazy') || s.contains("can't") || s.contains('hard')) {
+  if (s.contains('motivat') ||
+      s.contains('lazy') ||
+      s.contains("can't") ||
+      s.contains('hard')) {
     return "Motivation is unreliable—build a cue instead. After something you already do every day "
         "(coffee, brushing teeth), stack your new habit. Start so small it feels silly to skip.";
   }
@@ -5014,7 +5916,9 @@ class _HabitTeacherBotSheetState extends State<_HabitTeacherBotSheet> {
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.82),
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.sizeOf(context).width * 0.82,
+        ),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(18),
@@ -5023,7 +5927,11 @@ class _HabitTeacherBotSheetState extends State<_HabitTeacherBotSheet> {
             bottomRight: Radius.circular(isUser ? 4 : 18),
           ),
           color: isUser ? cyan.withOpacity(0.22) : const Color(0xFF0F1023),
-          border: Border.all(color: isUser ? cyan.withOpacity(0.35) : Colors.white.withOpacity(0.1)),
+          border: Border.all(
+            color: isUser
+                ? cyan.withOpacity(0.35)
+                : Colors.white.withOpacity(0.1),
+          ),
         ),
         child: Text(
           line.text.replaceAll('**', ''),
@@ -5046,7 +5954,11 @@ class _HabitTeacherBotSheetState extends State<_HabitTeacherBotSheet> {
         color: Color(0xFF1A1B3A),
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
         boxShadow: [
-          BoxShadow(color: Colors.black54, blurRadius: 24, offset: Offset(0, -4)),
+          BoxShadow(
+            color: Colors.black54,
+            blurRadius: 24,
+            offset: Offset(0, -4),
+          ),
         ],
       ),
       child: Column(
@@ -5070,7 +5982,11 @@ class _HabitTeacherBotSheetState extends State<_HabitTeacherBotSheet> {
                     color: cyan.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(14),
                   ),
-                  child: const Icon(Icons.smart_toy_rounded, color: cyan, size: 26),
+                  child: const Icon(
+                    Icons.smart_toy_rounded,
+                    color: cyan,
+                    size: 26,
+                  ),
                 ),
                 const SizedBox(width: 12),
                 const Expanded(
@@ -5124,7 +6040,10 @@ class _HabitTeacherBotSheetState extends State<_HabitTeacherBotSheet> {
                           const SizedBox(width: 10),
                           Text(
                             'Teacher is thinking…',
-                            style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 12),
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.45),
+                              fontSize: 12,
+                            ),
                           ),
                         ],
                       ),
@@ -5141,15 +6060,24 @@ class _HabitTeacherBotSheetState extends State<_HabitTeacherBotSheet> {
                 children: [
                   ActionChip(
                     label: const Text('How to start?'),
-                    labelStyle: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                    labelStyle: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
                     backgroundColor: const Color(0xFF0F1023),
                     side: BorderSide(color: Colors.white.withOpacity(0.14)),
-                    onPressed: () => _sendUserText('How do I start a new habit?'),
+                    onPressed: () =>
+                        _sendUserText('How do I start a new habit?'),
                   ),
                   const SizedBox(width: 8),
                   ActionChip(
                     label: const Text('Streaks'),
-                    labelStyle: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                    labelStyle: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
                     backgroundColor: const Color(0xFF0F1023),
                     side: BorderSide(color: Colors.white.withOpacity(0.14)),
                     onPressed: () => _sendUserText('Tell me about streaks'),
@@ -5157,16 +6085,29 @@ class _HabitTeacherBotSheetState extends State<_HabitTeacherBotSheet> {
                   const SizedBox(width: 8),
                   ActionChip(
                     label: const Text('Motivation'),
-                    labelStyle: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                    labelStyle: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
                     backgroundColor: const Color(0xFF0F1023),
                     side: BorderSide(color: Colors.white.withOpacity(0.14)),
-                    onPressed: () => _sendUserText('I struggle with motivation'),
+                    onPressed: () =>
+                        _sendUserText('I struggle with motivation'),
                   ),
                   const SizedBox(width: 8),
                   ActionChip(
-                    avatar: const Icon(Icons.add_circle_outline, color: cyan, size: 18),
+                    avatar: const Icon(
+                      Icons.add_circle_outline,
+                      color: cyan,
+                      size: 18,
+                    ),
                     label: const Text('Open habit creator'),
-                    labelStyle: const TextStyle(color: cyan, fontSize: 12, fontWeight: FontWeight.w700),
+                    labelStyle: const TextStyle(
+                      color: cyan,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
                     backgroundColor: cyan.withOpacity(0.12),
                     side: BorderSide(color: cyan.withOpacity(0.4)),
                     onPressed: widget.onOpenHabitCreator,
@@ -5188,22 +6129,31 @@ class _HabitTeacherBotSheetState extends State<_HabitTeacherBotSheet> {
                     maxLines: 4,
                     decoration: InputDecoration(
                       hintText: 'Ask your habit teacher…',
-                      hintStyle: TextStyle(color: Colors.white.withOpacity(0.35)),
+                      hintStyle: TextStyle(
+                        color: Colors.white.withOpacity(0.35),
+                      ),
                       filled: true,
                       fillColor: const Color(0xFF0F1023),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(16),
-                        borderSide: BorderSide(color: Colors.white.withOpacity(0.12)),
+                        borderSide: BorderSide(
+                          color: Colors.white.withOpacity(0.12),
+                        ),
                       ),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(16),
-                        borderSide: BorderSide(color: Colors.white.withOpacity(0.12)),
+                        borderSide: BorderSide(
+                          color: Colors.white.withOpacity(0.12),
+                        ),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(16),
                         borderSide: const BorderSide(color: cyan, width: 1.2),
                       ),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
                     ),
                     textInputAction: TextInputAction.send,
                     onSubmitted: _sendUserText,
@@ -5245,7 +6195,9 @@ class _HabitCreateSheet extends StatefulWidget {
 }
 
 List<(String label, IconData icon)> _activityPresetsForCategory(String cat) {
-  return _kActivityPresets.where((e) => _categoryForRadialLabel(e.$1) == cat).toList();
+  return _kActivityPresets
+      .where((e) => _categoryForRadialLabel(e.$1) == cat)
+      .toList();
 }
 
 class _HabitCreateSheetState extends State<_HabitCreateSheet> {
@@ -5345,13 +6297,13 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
           parts.add(_focusWorkMode!);
         }
         if (_focusMinutes != null) {
-          final minutesOnlyName = rawName.isEmpty &&
-              _focusWorkMode == null &&
-              _focusCue == null;
+          final minutesOnlyName =
+              rawName.isEmpty && _focusWorkMode == null && _focusCue == null;
           if (!minutesOnlyName) parts.add('${_focusMinutes}m block');
         }
         if (_focusCue != null) {
-          final cueOnlyName = rawName.isEmpty &&
+          final cueOnlyName =
+              rawName.isEmpty &&
               _focusWorkMode == null &&
               _focusMinutes == null;
           if (!cueOnlyName) parts.add(_focusCue!);
@@ -5360,13 +6312,14 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
       case 'move':
         final rawName = _titleCtrl.text.trim();
         final implicit = rawName.isNotEmpty ? null : _defaultTitleIfNameEmpty();
-        if (_moveKind != null && _moveKind != rawName && _moveKind != implicit) {
+        if (_moveKind != null &&
+            _moveKind != rawName &&
+            _moveKind != implicit) {
           parts.add(_moveKind!);
         }
         if (_moveMinutes != null) {
-          final minutesOnlyName = rawName.isEmpty &&
-              _moveKind == null &&
-              _moveIntensity == null;
+          final minutesOnlyName =
+              rawName.isEmpty && _moveKind == null && _moveIntensity == null;
           if (!minutesOnlyName) parts.add('${_moveMinutes}m');
         }
         if (_moveIntensity != null &&
@@ -5378,7 +6331,9 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
       case 'mind':
         final rawName = _titleCtrl.text.trim();
         final implicit = rawName.isNotEmpty ? null : _defaultTitleIfNameEmpty();
-        if (_mindKind != null && _mindKind != rawName && _mindKind != implicit) {
+        if (_mindKind != null &&
+            _mindKind != rawName &&
+            _mindKind != implicit) {
           parts.add(_mindKind!);
         }
         if (_mindMinutes != null) {
@@ -5407,54 +6362,75 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
       case 'gym':
         final rawName = _titleCtrl.text.trim();
         final implicit = rawName.isNotEmpty ? null : _defaultTitleIfNameEmpty();
-        if (_gymSplit != null && _gymSplit != rawName && _gymSplit != implicit) {
+        if (_gymSplit != null &&
+            _gymSplit != rawName &&
+            _gymSplit != implicit) {
           parts.add(_gymSplit!);
         }
         if (_gymMinutes != null) {
-          final minutesOnly = rawName.isEmpty && _gymSplit == null && _gymStyle == null;
+          final minutesOnly =
+              rawName.isEmpty && _gymSplit == null && _gymStyle == null;
           if (!minutesOnly) parts.add('${_gymMinutes}m');
         }
-        if (_gymStyle != null && _gymStyle != rawName && _gymStyle != implicit) {
+        if (_gymStyle != null &&
+            _gymStyle != rawName &&
+            _gymStyle != implicit) {
           parts.add(_gymStyle!);
         }
         break;
       case 'nutrition':
         final rawName = _titleCtrl.text.trim();
         final implicit = rawName.isNotEmpty ? null : _defaultTitleIfNameEmpty();
-        if (_nutritionFocus != null && _nutritionFocus != rawName && _nutritionFocus != implicit) {
+        if (_nutritionFocus != null &&
+            _nutritionFocus != rawName &&
+            _nutritionFocus != implicit) {
           parts.add(_nutritionFocus!);
         }
-        if (_nutritionMeal != null && _nutritionMeal != rawName && _nutritionMeal != implicit) {
+        if (_nutritionMeal != null &&
+            _nutritionMeal != rawName &&
+            _nutritionMeal != implicit) {
           parts.add(_nutritionMeal!);
         }
-        if (_nutritionExtra != null && _nutritionExtra != rawName && _nutritionExtra != implicit) {
+        if (_nutritionExtra != null &&
+            _nutritionExtra != rawName &&
+            _nutritionExtra != implicit) {
           parts.add(_nutritionExtra!);
         }
         break;
       case 'sleep':
         final rawName = _titleCtrl.text.trim();
         final implicit = rawName.isNotEmpty ? null : _defaultTitleIfNameEmpty();
-        if (_sleepTarget != null && _sleepTarget != rawName && _sleepTarget != implicit) {
+        if (_sleepTarget != null &&
+            _sleepTarget != rawName &&
+            _sleepTarget != implicit) {
           parts.add(_sleepTarget!);
         }
-        if (_sleepHabit != null && _sleepHabit != rawName && _sleepHabit != implicit) {
+        if (_sleepHabit != null &&
+            _sleepHabit != rawName &&
+            _sleepHabit != implicit) {
           parts.add(_sleepHabit!);
         }
         break;
       case 'social':
         final rawName = _titleCtrl.text.trim();
         final implicit = rawName.isNotEmpty ? null : _defaultTitleIfNameEmpty();
-        if (_socialType != null && _socialType != rawName && _socialType != implicit) {
+        if (_socialType != null &&
+            _socialType != rawName &&
+            _socialType != implicit) {
           parts.add(_socialType!);
         }
-        if (_socialCadence != null && _socialCadence != rawName && _socialCadence != implicit) {
+        if (_socialCadence != null &&
+            _socialCadence != rawName &&
+            _socialCadence != implicit) {
           parts.add(_socialCadence!);
         }
         break;
       case 'creative':
         final rawName = _titleCtrl.text.trim();
         final implicit = rawName.isNotEmpty ? null : _defaultTitleIfNameEmpty();
-        if (_creativeMedium != null && _creativeMedium != rawName && _creativeMedium != implicit) {
+        if (_creativeMedium != null &&
+            _creativeMedium != rawName &&
+            _creativeMedium != implicit) {
           parts.add(_creativeMedium!);
         }
         if (_creativeMinutes != null) {
@@ -5598,12 +6574,19 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
               }),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 160),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 9,
+                ),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(999),
-                  color: selected == v ? cyan.withOpacity(0.2) : const Color(0xFF0F1023),
+                  color: selected == v
+                      ? cyan.withOpacity(0.2)
+                      : const Color(0xFF0F1023),
                   border: Border.all(
-                    color: selected == v ? cyan : Colors.white.withOpacity(0.14),
+                    color: selected == v
+                        ? cyan
+                        : Colors.white.withOpacity(0.14),
                     width: selected == v ? 1.4 : 1,
                   ),
                 ),
@@ -5641,12 +6624,19 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
               onTap: () => setState(() => _frequency = id),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 160),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 9,
+                ),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(999),
-                  color: _frequency == id ? cyan.withOpacity(0.2) : const Color(0xFF0F1023),
+                  color: _frequency == id
+                      ? cyan.withOpacity(0.2)
+                      : const Color(0xFF0F1023),
                   border: Border.all(
-                    color: _frequency == id ? cyan : Colors.white.withOpacity(0.14),
+                    color: _frequency == id
+                        ? cyan
+                        : Colors.white.withOpacity(0.14),
                     width: _frequency == id ? 1.4 : 1,
                   ),
                 ),
@@ -5678,7 +6668,11 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             ),
             Text(
               'Work mode',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<String>(
@@ -5695,7 +6689,11 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             const SizedBox(height: 18),
             Text(
               'Target block',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<int>(
@@ -5707,7 +6705,11 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             const SizedBox(height: 18),
             Text(
               'Start cue',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<String>(
@@ -5733,11 +6735,22 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             ),
             Text(
               'Activity',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<String>(
-              values: const ['Walk', 'Run', 'Cycle', 'Strength', 'Stretch', 'Sports'],
+              values: const [
+                'Walk',
+                'Run',
+                'Cycle',
+                'Strength',
+                'Stretch',
+                'Sports',
+              ],
               selected: _moveKind,
               label: (s) => s,
               onSelect: (v) => _moveKind = v,
@@ -5745,7 +6758,11 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             const SizedBox(height: 18),
             Text(
               'Duration',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<int>(
@@ -5757,7 +6774,11 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             const SizedBox(height: 18),
             Text(
               'Effort',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<String>(
@@ -5778,11 +6799,20 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             ),
             Text(
               'Practice',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<String>(
-              values: const ['Meditation', 'Breathwork', 'Journal', 'Gratitude'],
+              values: const [
+                'Meditation',
+                'Breathwork',
+                'Journal',
+                'Gratitude',
+              ],
               selected: _mindKind,
               label: (s) => s,
               onSelect: (v) => _mindKind = v,
@@ -5790,7 +6820,11 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             const SizedBox(height: 18),
             Text(
               'Length',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<int>(
@@ -5802,7 +6836,11 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             const SizedBox(height: 18),
             Text(
               'Rhythm',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<String>(
@@ -5823,7 +6861,11 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             ),
             Text(
               'Format',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<String>(
@@ -5841,7 +6883,11 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             const SizedBox(height: 18),
             Text(
               'Session size',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<int>(
@@ -5888,11 +6934,22 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             ),
             Text(
               'Focus',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<String>(
-              values: const ['Push', 'Pull', 'Legs', 'Full body', 'Cardio', 'HIIT'],
+              values: const [
+                'Push',
+                'Pull',
+                'Legs',
+                'Full body',
+                'Cardio',
+                'HIIT',
+              ],
               selected: _gymSplit,
               label: (s) => s,
               onSelect: (v) => _gymSplit = v,
@@ -5900,7 +6957,11 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             const SizedBox(height: 18),
             Text(
               'Duration',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<int>(
@@ -5912,7 +6973,11 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             const SizedBox(height: 18),
             Text(
               'Style',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<String>(
@@ -5933,11 +6998,21 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             ),
             Text(
               'Goal',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<String>(
-              values: const ['Hydration', 'Protein', 'Whole foods', 'Meal timing', 'Less sugar'],
+              values: const [
+                'Hydration',
+                'Protein',
+                'Whole foods',
+                'Meal timing',
+                'Less sugar',
+              ],
               selected: _nutritionFocus,
               label: (s) => s,
               onSelect: (v) => _nutritionFocus = v,
@@ -5945,7 +7020,11 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             const SizedBox(height: 18),
             Text(
               'Meal',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<String>(
@@ -5957,7 +7036,11 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             const SizedBox(height: 18),
             Text(
               'Log style',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<String>(
@@ -5978,11 +7061,20 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             ),
             Text(
               'Target',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<String>(
-              values: const ['7h sleep', '8h+ sleep', 'Same bedtime', 'Same wake time'],
+              values: const [
+                '7h sleep',
+                '8h+ sleep',
+                'Same bedtime',
+                'Same wake time',
+              ],
               selected: _sleepTarget,
               label: (s) => s,
               onSelect: (v) => _sleepTarget = v,
@@ -5990,11 +7082,21 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             const SizedBox(height: 18),
             Text(
               'Habit',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<String>(
-              values: const ['No screens', 'Read', 'Stretch', 'Dim lights', 'Cool room'],
+              values: const [
+                'No screens',
+                'Read',
+                'Stretch',
+                'Dim lights',
+                'Cool room',
+              ],
               selected: _sleepHabit,
               label: (s) => s,
               onSelect: (v) => _sleepHabit = v,
@@ -6011,11 +7113,21 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             ),
             Text(
               'Type',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<String>(
-              values: const ['Call', 'Text', 'In person', 'Family time', 'Community'],
+              values: const [
+                'Call',
+                'Text',
+                'In person',
+                'Family time',
+                'Community',
+              ],
               selected: _socialType,
               label: (s) => s,
               onSelect: (v) => _socialType = v,
@@ -6023,11 +7135,19 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             const SizedBox(height: 18),
             Text(
               'Cadence',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<String>(
-              values: const ['Daily check-in', 'Weekly date', 'Monthly catch-up'],
+              values: const [
+                'Daily check-in',
+                'Weekly date',
+                'Monthly catch-up',
+              ],
               selected: _socialCadence,
               label: (s) => s,
               onSelect: (v) => _socialCadence = v,
@@ -6044,11 +7164,21 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             ),
             Text(
               'Medium',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<String>(
-              values: const ['Writing', 'Music', 'Drawing', 'Photography', 'Side project'],
+              values: const [
+                'Writing',
+                'Music',
+                'Drawing',
+                'Photography',
+                'Side project',
+              ],
               selected: _creativeMedium,
               label: (s) => s,
               onSelect: (v) => _creativeMedium = v,
@@ -6056,7 +7186,11 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             const SizedBox(height: 18),
             Text(
               'Session',
-              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             _pillRow<int>(
@@ -6083,7 +7217,11 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
         color: Color(0xFF1A1B3A),
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
         boxShadow: [
-          BoxShadow(color: Colors.black54, blurRadius: 24, offset: Offset(0, -4)),
+          BoxShadow(
+            color: Colors.black54,
+            blurRadius: 24,
+            offset: Offset(0, -4),
+          ),
         ],
       ),
       child: Column(
@@ -6134,10 +7272,15 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  widget.initialTitle != null && widget.initialTitle!.trim().isNotEmpty
+                  widget.initialTitle != null &&
+                          widget.initialTitle!.trim().isNotEmpty
                       ? 'You picked this from the wheel — category is set below. Add notes, repeat, and optional details, then save.'
                       : 'Type a clear name you can check off. Optional fields help you remember why and how often.',
-                  style: TextStyle(color: Colors.white.withOpacity(0.42), fontSize: 11, height: 1.35),
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.42),
+                    fontSize: 11,
+                    height: 1.35,
+                  ),
                 ),
                 const SizedBox(height: 12),
                 TextField(
@@ -6147,16 +7290,22 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
                     hintText: 'e.g. Drink 8 glasses of water',
                     hintStyle: TextStyle(color: Colors.white.withOpacity(0.45)),
                     labelText: 'Habit name',
-                    labelStyle: TextStyle(color: Colors.white.withOpacity(0.65)),
+                    labelStyle: TextStyle(
+                      color: Colors.white.withOpacity(0.65),
+                    ),
                     filled: true,
                     fillColor: const Color(0xFF0F1023),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(14),
-                      borderSide: BorderSide(color: Colors.white.withOpacity(0.12)),
+                      borderSide: BorderSide(
+                        color: Colors.white.withOpacity(0.12),
+                      ),
                     ),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(14),
-                      borderSide: BorderSide(color: Colors.white.withOpacity(0.12)),
+                      borderSide: BorderSide(
+                        color: Colors.white.withOpacity(0.12),
+                      ),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(14),
@@ -6169,7 +7318,11 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
                 const SizedBox(height: 16),
                 Text(
                   'Why / reminder (optional)',
-                  style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.45),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 TextField(
@@ -6178,17 +7331,22 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
                   minLines: 2,
                   maxLines: 4,
                   decoration: InputDecoration(
-                    hintText: 'Motivation, trigger, or a detail for future you…',
+                    hintText:
+                        'Motivation, trigger, or a detail for future you…',
                     hintStyle: TextStyle(color: Colors.white.withOpacity(0.38)),
                     filled: true,
                     fillColor: const Color(0xFF0F1023),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(14),
-                      borderSide: BorderSide(color: Colors.white.withOpacity(0.12)),
+                      borderSide: BorderSide(
+                        color: Colors.white.withOpacity(0.12),
+                      ),
                     ),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(14),
-                      borderSide: BorderSide(color: Colors.white.withOpacity(0.12)),
+                      borderSide: BorderSide(
+                        color: Colors.white.withOpacity(0.12),
+                      ),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(14),
@@ -6200,7 +7358,11 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
                 const SizedBox(height: 16),
                 Text(
                   'Repeat',
-                  style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700),
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.45),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 _buildFrequencyRow(),
@@ -6237,24 +7399,32 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
                               gradient: _category == id
                                   ? LinearGradient(
                                       colors: [
-                                        _accentForHabitCategory(id).withOpacity(0.22),
+                                        _accentForHabitCategory(
+                                          id,
+                                        ).withOpacity(0.22),
                                         const Color(0xFF0F1023),
                                       ],
                                       begin: Alignment.topLeft,
                                       end: Alignment.bottomRight,
                                     )
                                   : null,
-                              color: _category == id ? null : const Color(0xFF0F1023),
+                              color: _category == id
+                                  ? null
+                                  : const Color(0xFF0F1023),
                               border: Border.all(
                                 color: _category == id
                                     ? _accentForHabitCategory(id)
-                                    : _accentForHabitCategory(id).withOpacity(0.38),
+                                    : _accentForHabitCategory(
+                                        id,
+                                      ).withOpacity(0.38),
                                 width: _category == id ? 1.6 : 1,
                               ),
                               boxShadow: _category == id
                                   ? [
                                       BoxShadow(
-                                        color: _accentForHabitCategory(id).withOpacity(0.22),
+                                        color: _accentForHabitCategory(
+                                          id,
+                                        ).withOpacity(0.22),
                                         blurRadius: 12,
                                         spreadRadius: 0,
                                       ),
@@ -6270,13 +7440,17 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
                                   size: 22,
                                   color: _category == id
                                       ? _accentForHabitCategory(id)
-                                      : _accentForHabitCategory(id).withOpacity(0.72),
+                                      : _accentForHabitCategory(
+                                          id,
+                                        ).withOpacity(0.72),
                                 ),
                                 const SizedBox(height: 6),
                                 Text(
                                   label,
                                   style: TextStyle(
-                                    color: Colors.white.withOpacity(_category == id ? 1 : 0.88),
+                                    color: Colors.white.withOpacity(
+                                      _category == id ? 1 : 0.88,
+                                    ),
                                     fontWeight: FontWeight.w800,
                                     fontSize: 14,
                                   ),
@@ -6311,7 +7485,11 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
                 const SizedBox(height: 6),
                 Text(
                   'Extras are merged into the habit name (duration, cue, format…). Skip if your name above is enough.',
-                  style: TextStyle(color: Colors.white.withOpacity(0.42), fontSize: 11, height: 1.35),
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.42),
+                    fontSize: 11,
+                    height: 1.35,
+                  ),
                 ),
                 const SizedBox(height: 12),
                 AnimatedSwitcher(
@@ -6348,7 +7526,10 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
                 const SizedBox(height: 6),
                 Text(
                   'Matched to your lane',
-                  style: TextStyle(color: Colors.white.withOpacity(0.38), fontSize: 11),
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.38),
+                    fontSize: 11,
+                  ),
                 ),
                 const SizedBox(height: 10),
                 Wrap(
@@ -6360,17 +7541,28 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
                         avatar: Icon(
                           icon,
                           size: 18,
-                          color: _accentForHabitCategory(_categoryForRadialLabel(label)),
+                          color: _accentForHabitCategory(
+                            _categoryForRadialLabel(label),
+                          ),
                         ),
                         label: Text(label),
-                        labelStyle: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13),
-                        backgroundColor: _accentForHabitCategory(_categoryForRadialLabel(label))
-                            .withOpacity(0.12),
-                        side: BorderSide(
-                          color: _accentForHabitCategory(_categoryForRadialLabel(label))
-                              .withOpacity(0.45),
+                        labelStyle: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
                         ),
-                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                        backgroundColor: _accentForHabitCategory(
+                          _categoryForRadialLabel(label),
+                        ).withOpacity(0.12),
+                        side: BorderSide(
+                          color: _accentForHabitCategory(
+                            _categoryForRadialLabel(label),
+                          ).withOpacity(0.45),
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                          vertical: 2,
+                        ),
                         onPressed: () => _applyTemplate(label),
                       ),
                   ],
@@ -6385,25 +7577,43 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
                       foregroundColor: Colors.white,
                       disabledBackgroundColor: Colors.white24,
                       padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
                     ),
                     child: _saving
                         ? const SizedBox(
                             height: 22,
                             width: 22,
-                            child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white),
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.2,
+                              color: Colors.white,
+                            ),
                           )
-                        : const Text('Add habit', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                        : const Text(
+                            'Add habit',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
                   ),
                 ),
                 const SizedBox(height: 12),
                 Center(
                   child: TextButton.icon(
                     onPressed: widget.onOpenActivityWheel,
-                    icon: const Icon(Icons.blur_circular, color: Color(0xFF00D9FF), size: 20),
+                    icon: const Icon(
+                      Icons.blur_circular,
+                      color: Color(0xFF00D9FF),
+                      size: 20,
+                    ),
                     label: const Text(
                       'Activity wheel instead',
-                      style: TextStyle(color: Color(0xFF00D9FF), fontWeight: FontWeight.w600),
+                      style: TextStyle(
+                        color: Color(0xFF00D9FF),
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                 ),
@@ -6432,24 +7642,29 @@ class RadialActivityPickerOverlay extends StatefulWidget {
   final Offset fabTopLeft;
   final Size fabSize;
   final VoidCallback onClose;
+
   /// Legacy: add habit immediately (unused when [onPresetChosen] is set).
   final Future<void> Function(String title, String category)? onPickActivity;
+
   /// Opens the full habit form after dismiss; pass preset label + category.
   final void Function(String title, String category)? onPresetChosen;
   final Future<void> Function()? onAfterCustomHabit;
 
   @override
-  State<RadialActivityPickerOverlay> createState() => _RadialActivityPickerOverlayState();
+  State<RadialActivityPickerOverlay> createState() =>
+      _RadialActivityPickerOverlayState();
 }
 
-class _RadialActivityPickerOverlayState extends State<RadialActivityPickerOverlay>
+class _RadialActivityPickerOverlayState
+    extends State<RadialActivityPickerOverlay>
     with TickerProviderStateMixin {
   late final AnimationController _controller;
   late final AnimationController _orbitController;
   late final Animation<double> _expand;
   bool _dismissing = false;
 
-  static const List<(String label, IconData icon)> _activities = _kActivityPresets;
+  static const List<(String label, IconData icon)> _activities =
+      _kActivityPresets;
 
   @override
   void initState() {
@@ -6462,7 +7677,11 @@ class _RadialActivityPickerOverlayState extends State<RadialActivityPickerOverla
       vsync: this,
       duration: const Duration(seconds: 18),
     )..repeat();
-    _expand = CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic, reverseCurve: Curves.easeInCubic);
+    _expand = CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
     _controller.forward();
   }
 
@@ -6531,9 +7750,7 @@ class _RadialActivityPickerOverlayState extends State<RadialActivityPickerOverla
             children: [
               BackdropFilter(
                 filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-                child: Container(
-                  color: Colors.black.withOpacity(0.18),
-                ),
+                child: Container(color: Colors.black.withOpacity(0.18)),
               ),
               IgnorePointer(
                 child: Container(
@@ -6571,12 +7788,22 @@ class _RadialActivityPickerOverlayState extends State<RadialActivityPickerOverla
             // Hub slides from + button to screen center; arc radius grows with same progress.
             final curHubX = fabCx + (hubCx - fabCx) * t;
             final curHubY = fabCy + (hubCy - fabCy) * t;
-            final vignetteX = ((curHubX / mqSize.width).clamp(0.001, 0.999)) * 2 - 1;
-            final vignetteY = ((curHubY / mqSize.height).clamp(0.001, 0.999)) * 2 - 1;
+            final vignetteX =
+                ((curHubX / mqSize.width).clamp(0.001, 0.999)) * 2 - 1;
+            final vignetteY =
+                ((curHubY / mqSize.height).clamp(0.001, 0.999)) * 2 - 1;
             // Full 360° ring; use most of safe margin so neighbors have more arc length between them.
             final edgePad = 6.0;
-            final maxRx = (math.min(curHubX, mqSize.width - curHubX) - chipW / 2 - edgePad).clamp(68.0, 400.0);
-            final maxRy = (math.min(curHubY, mqSize.height - curHubY) - chipH / 2 - edgePad).clamp(68.0, 400.0);
+            final maxRx =
+                (math.min(curHubX, mqSize.width - curHubX) -
+                        chipW / 2 -
+                        edgePad)
+                    .clamp(68.0, 400.0);
+            final maxRy =
+                (math.min(curHubY, mqSize.height - curHubY) -
+                        chipH / 2 -
+                        edgePad)
+                    .clamp(68.0, 400.0);
             final ringRadius = math.min(206.0, math.min(maxRx, maxRy));
             return Stack(
               fit: StackFit.expand,
@@ -6608,6 +7835,7 @@ class _RadialActivityPickerOverlayState extends State<RadialActivityPickerOverla
                           void runAfter() {
                             after();
                           }
+
                           if (kIsWeb) {
                             WidgetsBinding.instance.addPostFrameCallback((_) {
                               WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -6630,14 +7858,20 @@ class _RadialActivityPickerOverlayState extends State<RadialActivityPickerOverla
                         alignment: Alignment.center,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: const Color(0xFF00D9FF).withOpacity(0.12 * t.clamp(0, 1)),
+                          color: const Color(
+                            0xFF00D9FF,
+                          ).withOpacity(0.12 * t.clamp(0, 1)),
                           border: Border.all(
-                            color: const Color(0xFF00D9FF).withOpacity(0.55 * t.clamp(0, 1)),
+                            color: const Color(
+                              0xFF00D9FF,
+                            ).withOpacity(0.55 * t.clamp(0, 1)),
                             width: 2,
                           ),
                           boxShadow: [
                             BoxShadow(
-                              color: const Color(0xFF00D9FF).withOpacity(0.45 * t.clamp(0, 1)),
+                              color: const Color(
+                                0xFF00D9FF,
+                              ).withOpacity(0.45 * t.clamp(0, 1)),
                               blurRadius: 28,
                               spreadRadius: 2,
                             ),
@@ -6647,13 +7881,19 @@ class _RadialActivityPickerOverlayState extends State<RadialActivityPickerOverla
                           'Custom',
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            color: Colors.white.withOpacity((0.2 + 0.8 * t).clamp(0.0, 1.0)),
+                            color: Colors.white.withOpacity(
+                              (0.2 + 0.8 * t).clamp(0.0, 1.0),
+                            ),
                             fontWeight: FontWeight.w800,
                             fontSize: 13,
                             letterSpacing: 0.4,
                             height: 1.0,
                             shadows: const [
-                              Shadow(color: Colors.black87, blurRadius: 8, offset: Offset(0, 1)),
+                              Shadow(
+                                color: Colors.black87,
+                                blurRadius: 8,
+                                offset: Offset(0, 1),
+                              ),
                             ],
                           ),
                         ),
@@ -6663,15 +7903,18 @@ class _RadialActivityPickerOverlayState extends State<RadialActivityPickerOverla
                 ),
                 ...List<Widget>.generate(n, (i) {
                   // Even spacing on a full circle, starting from top (-π/2), clockwise.
-                  final baseAngle =
-                      n <= 1 ? -math.pi / 2 : -math.pi / 2 + (2 * math.pi * i) / n;
+                  final baseAngle = n <= 1
+                      ? -math.pi / 2
+                      : -math.pi / 2 + (2 * math.pi * i) / n;
                   // Slow continuous orbit around the center "Custom" hub.
                   final angle = baseAngle + orbitPhase;
                   final r = ringRadius * t;
                   final dx = math.cos(angle) * r;
                   final dy = math.sin(angle) * r;
                   final (String label, IconData icon) = _activities[i];
-                  final accent = _accentForHabitCategory(_categoryForRadialLabel(label));
+                  final accent = _accentForHabitCategory(
+                    _categoryForRadialLabel(label),
+                  );
                   return Positioned(
                     left: curHubX + dx - chipW / 2,
                     top: curHubY + dy - chipH / 2,
@@ -6733,7 +7976,10 @@ class _ActivityChip extends StatelessWidget {
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: Colors.black.withOpacity(0.82),
-              border: Border.all(color: accentColor.withOpacity(0.72), width: 1.75),
+              border: Border.all(
+                color: accentColor.withOpacity(0.72),
+                width: 1.75,
+              ),
               boxShadow: [
                 BoxShadow(
                   color: accentColor.withOpacity(0.38),
@@ -6753,12 +7999,20 @@ class _ActivityChip extends StatelessWidget {
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                color: Color.lerp(Colors.white, accentColor, 0.35)!.withOpacity(0.98),
+                color: Color.lerp(
+                  Colors.white,
+                  accentColor,
+                  0.35,
+                )!.withOpacity(0.98),
                 fontWeight: FontWeight.w700,
                 fontSize: 10,
                 height: 1.12,
                 shadows: const [
-                  Shadow(color: Colors.black87, blurRadius: 6, offset: Offset(0, 1)),
+                  Shadow(
+                    color: Colors.black87,
+                    blurRadius: 6,
+                    offset: Offset(0, 1),
+                  ),
                 ],
               ),
             ),
@@ -6776,7 +8030,11 @@ class WavePainter extends CustomPainter {
   final double progress;
   final double waveValue;
 
-  WavePainter({required this.color, required this.progress, required this.waveValue});
+  WavePainter({
+    required this.color,
+    required this.progress,
+    required this.waveValue,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -6794,7 +8052,11 @@ class WavePainter extends CustomPainter {
     for (double i = 0; i <= size.width; i++) {
       path.lineTo(
         i,
-        startY + math.sin((i / size.width * 2 * math.pi) + (waveValue * 2 * math.pi)) * 4,
+        startY +
+            math.sin(
+                  (i / size.width * 2 * math.pi) + (waveValue * 2 * math.pi),
+                ) *
+                4,
       );
     }
 
@@ -6813,7 +8075,11 @@ class WavePainter extends CustomPainter {
     for (double i = 0; i <= size.width; i++) {
       path2.lineTo(
         i,
-        startY + math.cos((i / size.width * 2 * math.pi) + (waveValue * 2 * math.pi)) * 4,
+        startY +
+            math.cos(
+                  (i / size.width * 2 * math.pi) + (waveValue * 2 * math.pi),
+                ) *
+                4,
       );
     }
 

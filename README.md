@@ -1,6 +1,6 @@
 # kultivateNewVers
 
-A Flutter project (kultivate_new_ver).
+A habit Tracking app 
 
 ## Getting Started
 
