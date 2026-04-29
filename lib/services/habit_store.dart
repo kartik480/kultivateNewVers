@@ -20,6 +20,7 @@ class HabitStore extends ChangeNotifier {
 
   final List<Habit> habits = [];
   final Map<String, Set<String>> _completionsByHabit = {};
+  final Map<String, int> _toggleEpochByHabit = {};
   String displayName = 'there';
   String? email;
   int bestStreakRecorded = 0;
@@ -563,6 +564,9 @@ class HabitStore extends ChangeNotifier {
   }
 
   Future<void> toggleCompleteToday(String habitId) async {
+    final epoch = (_toggleEpochByHabit[habitId] ?? 0) + 1;
+    _toggleEpochByHabit[habitId] = epoch;
+
     final t = DateTime.now();
     final k = _dateKey(t);
     _completionsByHabit.putIfAbsent(habitId, () => {});
@@ -589,6 +593,8 @@ class HabitStore extends ChangeNotifier {
           body: jsonEncode({'day': k}),
         );
         if (res.statusCode == 200) {
+          // Ignore stale responses when users toggle quickly in succession.
+          if (_toggleEpochByHabit[habitId] != epoch) return;
           final data = jsonDecode(res.body) as Map<String, dynamic>;
           _applyRemoteState(data);
           notifyListeners();
@@ -616,6 +622,7 @@ class HabitStore extends ChangeNotifier {
         if (res.statusCode == 200) {
           habits.removeWhere((h) => h.id == habitId);
           _completionsByHabit.remove(habitId);
+          _toggleEpochByHabit.remove(habitId);
           await _persist();
           notifyListeners();
           return;
@@ -628,6 +635,7 @@ class HabitStore extends ChangeNotifier {
 
     habits.removeWhere((h) => h.id == habitId);
     _completionsByHabit.remove(habitId);
+    _toggleEpochByHabit.remove(habitId);
     await _persist();
     notifyListeners();
   }
