@@ -201,6 +201,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   static const String _defaultCompanionAsset = 'companions/babydragon.mp4';
   static const String _kManualReminders = 'manual_reminders_json';
   static const String _kReminderHistory = 'manual_reminder_history_json';
+  static const int _kTodoPreviewLimit = 2;
+  static const int _kMomentumPreviewLimit = 10;
   double _navBarHeight = 120.0;
   final double _minHeight = 120.0;
 
@@ -220,6 +222,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   bool _isSwitchingCompanionVideo = false;
   bool _wasCompanionsExpanded = false;
   bool _isSocialTemporarilyLocked = true;
+  bool _isRadialMenuOpen = false;
+  bool _momentumHabitListExpanded = false;
+  bool _showAllHomeHabits = false;
   Habit? _selectedManualReminderHabit;
   TimeOfDay _manualReminderTime = const TimeOfDay(hour: 7, minute: 0);
   final TextEditingController _manualReminderHabitCtrl =
@@ -734,6 +739,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   void _openActivityRadialMenu() {
     _pendingRadialHabitForm = null;
     final (topLeft, fabSize) = _fabTopLeftAndSize();
+    if (mounted) {
+      setState(() => _isRadialMenuOpen = true);
+    }
 
     showGeneralDialog<void>(
       context: context,
@@ -769,13 +777,29 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           },
         );
       },
-    );
+    ).whenComplete(() {
+      if (!mounted) return;
+      setState(() => _isRadialMenuOpen = false);
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final double screenHeight = MediaQuery.of(context).size.height;
     final double maxHeight = screenHeight;
+    // After SafeArea reserves the status bar, inner height would be
+    // `_navBarHeight - topInset` unless we extend the outer height.
+    final double topInset = MediaQuery.paddingOf(context).top;
+    final double outerPanelHeight = math.min(
+      screenHeight,
+      _navBarHeight + topInset,
+    );
+    // Visible gap between the bottom of the top panel and the greeting block.
+    const double gapBelowTopNav = 28;
+    final double scrollTopPadding = math.min(
+      outerPanelHeight + gapBelowTopNav,
+      screenHeight * 0.32,
+    );
     final bool companionsExpanded = _navBarHeight > 250;
     if (companionsExpanded && !_wasCompanionsExpanded) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -835,11 +859,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     physics: const AlwaysScrollableScrollPhysics(
                       parent: BouncingScrollPhysics(),
                     ),
-                    padding: const EdgeInsets.only(
-                      top: 170,
+                    padding: EdgeInsets.only(
+                      top: scrollTopPadding,
                       left: 16,
                       right: 16,
-                      bottom: 150,
+                      bottom: 210,
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -913,15 +937,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         ),
                         const SizedBox(height: 20),
                         _buildStatsCarousel(),
-                        const SizedBox(height: 25),
+                        const SizedBox(height: 38),
                         AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 280),
+                          duration: const Duration(milliseconds: 300),
                           switchInCurve: Curves.easeOutCubic,
                           switchOutCurve: Curves.easeInCubic,
                           transitionBuilder: _buildStatsSwapTransition,
                           child: Column(
                             key: ValueKey<int>(_statsPageIndex),
                             crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
                             children: [
                               Text(
                                 _statsPanelSectionTitle(),
@@ -936,27 +961,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                 _statsPanelSectionSubtitle(),
                                 style: TextStyle(
                                   fontSize: 13,
-                                  height: 1.35,
+                                  height: 1.25,
                                   color: Colors.white.withOpacity(0.58),
                                 ),
                               ),
-                              const SizedBox(height: 14),
+                              const SizedBox(height: 12),
+                              ..._buildHabitSectionForStatsPage(
+                                context,
+                                _statsPageIndex,
+                              ),
                             ],
-                          ),
-                        ),
-                        AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 320),
-                          switchInCurve: Curves.easeOutCubic,
-                          switchOutCurve: Curves.easeInCubic,
-                          transitionBuilder: _buildStatsSwapTransition,
-                          child: Column(
-                            key: ValueKey<String>(
-                              'stats-content-$_statsPageIndex',
-                            ),
-                            children: _buildHabitSectionForStatsPage(
-                              context,
-                              _statsPageIndex,
-                            ),
                           ),
                         ),
                       ],
@@ -986,7 +1000,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 top: 0,
                 left: 0,
                 right: 0,
-                height: _navBarHeight,
+                height: outerPanelHeight,
                 child: Container(
                   decoration: BoxDecoration(
                     color: const Color(0xFF1A1B3A),
@@ -1360,6 +1374,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         : (s.bestStreakRecorded / 60.0).clamp(0.0, 1.0);
     const cyan = Color(0xFF00D9FF);
 
+    final mq = MediaQuery.sizeOf(context);
+    final carouselPageHeight = (mq.height * 0.22).clamp(172.0, 200.0);
+
     return Container(
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.08),
@@ -1371,7 +1388,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           SizedBox(
-            height: 188,
+            height: carouselPageHeight,
             child: PageView.builder(
               controller: _statsPageController,
               itemCount: _statsPageCount,
@@ -1722,17 +1739,100 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   List<Widget> _buildHabitSectionForStatsPage(BuildContext context, int page) {
     final store = HabitStore.instance;
     if (store.habits.isEmpty) {
+      if (page == 0) {
+        return [
+          ..._buildHabitSection(context),
+          _buildStreakTodoListHeadingSection(context),
+        ];
+      }
       return _buildHabitSection(context);
     }
     switch (page) {
       case 0:
-        break;
+        return [
+          _buildTodoListSection(context, store.habits),
+          _buildStreakTodoListHeadingSection(context),
+        ];
       case 1:
         return _buildReminderSection(context);
       case 2:
         return _buildCompanionHomeSection(context);
     }
-    return [_habitGrid(context, store.habits)];
+    return [
+      _buildTodoListSection(context, store.habits),
+      _buildStreakTodoListHeadingSection(context),
+    ];
+  }
+
+  Widget _buildTodoListSection(BuildContext context, List<Habit> habits) {
+    const accent = Color(0xFF00D9FF);
+    final canExpand = habits.length > _kMomentumPreviewLimit;
+    final expanded = _momentumHabitListExpanded && canExpand;
+    final visibleCount =
+        expanded || !canExpand ? habits.length : _kMomentumPreviewLimit;
+    final visibleHabits = habits.take(visibleCount).toList(growable: false);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _habitGrid(context, visibleHabits),
+        if (canExpand) ...[
+          const SizedBox(height: 6),
+          Center(
+            child: TextButton(
+              onPressed: () {
+                setState(() {
+                  _momentumHabitListExpanded = !_momentumHabitListExpanded;
+                });
+              },
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 1),
+                minimumSize: const Size(0, 0),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                visualDensity: VisualDensity.compact,
+              ),
+              child: Text(
+                _momentumHabitListExpanded ? 'Show less' : 'View more',
+                style: TextStyle(
+                  color: accent.withOpacity(0.95),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// Shown under streak momentum habits — matches [AnimatedSwitcher] streak heading styles.
+  Widget _buildStreakTodoListHeadingSection(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 22),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'To-Do list',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'One-off tasks for today — separate from your streak habits.',
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.25,
+              color: Colors.white.withOpacity(0.58),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   List<Widget> _buildReminderSection(BuildContext context) {
@@ -2991,7 +3091,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         Positioned.fill(
                           child: IgnorePointer(
                             ignoring: true,
-                            child: VideoPlayer(_babyDragonController),
+                            child: _isRadialMenuOpen
+                                ? Container(
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF10142B).withOpacity(0.82),
+                                      gradient: LinearGradient(
+                                        begin: Alignment.topLeft,
+                                        end: Alignment.bottomRight,
+                                        colors: [
+                                          Colors.white.withOpacity(0.04),
+                                          Colors.black.withOpacity(0.18),
+                                        ],
+                                      ),
+                                    ),
+                                  )
+                                : VideoPlayer(_babyDragonController),
                           ),
                         ),
                         // Opaque to hit-testing so the parent scroll view receives drags
@@ -3182,12 +3296,42 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ),
       ];
     }
-    return [_habitGrid(context, store.habits)];
+    final canExpand = store.habits.length > _kTodoPreviewLimit;
+    final visibleCount =
+        _showAllHomeHabits || !canExpand
+            ? store.habits.length
+            : _kTodoPreviewLimit;
+    final visibleHabits =
+        store.habits.take(visibleCount).toList(growable: false);
+
+    return [
+      _habitGrid(context, visibleHabits),
+      if (canExpand) ...[
+        const SizedBox(height: 10),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton(
+            onPressed: () {
+              setState(() => _showAllHomeHabits = !_showAllHomeHabits);
+            },
+            child: Text(
+              _showAllHomeHabits ? 'Show less' : 'View more',
+              style: const TextStyle(
+                color: Color(0xFF00D9FF),
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ),
+      ],
+    ];
   }
 
   /// Habit list on the home panel — full-width row cards (not a grid).
   Widget _habitGrid(BuildContext context, List<Habit> habits) {
     return ListView.separated(
+      padding: EdgeInsets.zero,
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       itemCount: habits.length,
@@ -3526,10 +3670,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Widget _buildBottomNavBar() {
     final isSocialLocked = _isSocialTemporarilyLocked;
+    final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
     return Padding(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + bottomInset * 0.35),
       child: Container(
-        height: 80,
+        constraints: const BoxConstraints(minHeight: 72, maxHeight: 96),
         decoration: BoxDecoration(
           color: const Color(0xFF1A1B3A),
           borderRadius: BorderRadius.circular(30),
@@ -3588,6 +3733,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             const SizedBox(height: 4),
             Text(
               label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
               style: TextStyle(
                 color: isActive ? const Color(0xFF00D9FF) : Colors.white,
                 fontSize: 12,

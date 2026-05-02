@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "900985236220",
+    "project_id": "kultivatenewvers",
+    "storage_bucket": "kultivatenewvers.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:900985236220:android:0bf9916945aeb8c3acc579",
+        "android_client_info": {
+          "package_name": "com.example.kultivate_new_ver"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCX6IlOjwIyBk1U8Bjm72g9wtvSlltOW6s"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

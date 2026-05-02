@@ -27,6 +27,8 @@ class HabitStore extends ChangeNotifier {
 
   bool _loaded = false;
   bool get isLoaded => _loaded;
+  Timer? _dayRolloverTimer;
+  String? _lastKnownDayKey;
 
   static final RegExp _mongoIdRe = RegExp(r'^[a-f0-9]{24}$', caseSensitive: false);
 
@@ -153,8 +155,25 @@ class HabitStore extends ChangeNotifier {
     }
 
     await _syncWithServerIfLoggedIn();
+    _lastKnownDayKey = _dateKey(DateTime.now());
+    _startDayRolloverTimer();
     _loaded = true;
     notifyListeners();
+  }
+
+  void _startDayRolloverTimer() {
+    _dayRolloverTimer?.cancel();
+    _dayRolloverTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      final todayKey = _dateKey(DateTime.now());
+      if (_lastKnownDayKey == null) {
+        _lastKnownDayKey = todayKey;
+        return;
+      }
+      if (todayKey != _lastKnownDayKey) {
+        _lastKnownDayKey = todayKey;
+        notifyListeners();
+      }
+    });
   }
 
   Future<void> _persist() async {
@@ -650,6 +669,12 @@ class HabitStore extends ChangeNotifier {
       default:
         return 'daily';
     }
+  }
+
+  @override
+  void dispose() {
+    _dayRolloverTimer?.cancel();
+    super.dispose();
   }
 }
 
