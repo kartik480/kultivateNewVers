@@ -15,6 +15,7 @@ const ReminderSchema = new mongoose.Schema(
       index: true,
     },
     habitTitle: { type: String, required: true, trim: true },
+    alarmId: { type: Number, required: false },
     time: { type: String, required: true, trim: true }, // e.g. 7:00 AM
     note: { type: String, default: "", trim: true },
     createdAtClient: { type: Date, required: false },

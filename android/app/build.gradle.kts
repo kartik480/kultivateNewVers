@@ -26,6 +26,7 @@ android {
         applicationId = "com.example.kultivate_new_ver"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
+        multiDexEnabled = true
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

@@ -8,6 +8,7 @@ function reminderToClient(r) {
   return {
     id: r._id.toString(),
     habitId: r.habitId ? r.habitId.toString() : null,
+    alarmId: r.alarmId != null ? Number(r.alarmId) : null,
     habitTitle: r.habitTitle,
     time: r.time,
     note: r.note && String(r.note).trim() ? String(r.note).trim() : null,
@@ -33,7 +34,7 @@ router.get("/", async (req, res) => {
 
 router.post("/", async (req, res) => {
   try {
-    const { habitId, habitTitle, time, note, createdAt } = req.body ?? {};
+    const { alarmId, habitId, habitTitle, time, note, createdAt } = req.body ?? {};
     if (typeof habitTitle !== "string" || !habitTitle.trim()) {
       return res.status(400).json({ message: "habitTitle required" });
     }
@@ -46,6 +47,9 @@ router.post("/", async (req, res) => {
       time: time.trim(),
       note: typeof note === "string" ? note.trim() : "",
     };
+    if (alarmId != null && Number.isFinite(Number(alarmId))) {
+      payload.alarmId = Number(alarmId);
+    }
     if (habitId && mongoose.Types.ObjectId.isValid(habitId)) {
       payload.habitId = habitId;
     }

@@ -1,4 +1,6 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:app_settings/app_settings.dart';
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -97,13 +99,6 @@ const Color _kHomeShellBg = Color(0xFF0F1023);
 /// Top header + bottom nav: tonal lift from [_kHomeShellBg], biased cyan to pair with the accent.
 const Color _kHomeNavChromeBg = Color(0xFF10182E);
 
-String _greetingForNow() {
-  final h = DateTime.now().hour;
-  if (h < 12) return 'Good morning';
-  if (h < 17) return 'Good afternoon';
-  return 'Good evening';
-}
-
 /// Shared between the habit creation panel and the radial FAB picker.
 const List<(String label, IconData icon)> _kActivityPresets = [
   ('Yoga', Icons.self_improvement),
@@ -191,6 +186,72 @@ class _ReminderHistoryEntry {
       createdAt:
           DateTime.tryParse((j['createdAt'] ?? '').toString()) ??
           DateTime.now(),
+    );
+  }
+}
+
+/// Drives the reminder carousel clock at 1 Hz instead of tying it to
+/// [_waveController] (~60 ticks/s), which was a major source of jank.
+class _ReminderLensClockTicker extends StatefulWidget {
+  const _ReminderLensClockTicker({
+    required this.buildAnalog,
+    required this.formatDigital,
+  });
+
+  final Widget Function(DateTime now) buildAnalog;
+  final String Function(DateTime now) formatDigital;
+
+  @override
+  State<_ReminderLensClockTicker> createState() =>
+      _ReminderLensClockTickerState();
+}
+
+class _ReminderLensClockTickerState extends State<_ReminderLensClockTicker> {
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 12, 18, 6),
+      child: Column(
+        children: [
+          widget.buildAnalog(now),
+          const SizedBox(height: 6),
+          Text(
+            widget.formatDigital(now),
+            style: const TextStyle(
+              color: Color(0xFF00D9FF),
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Reminder clock',
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.62),
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -395,6 +456,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       if (res.statusCode != 200) return;
       final body = jsonDecode(res.body) as Map<String, dynamic>;
       final list = body['reminders'] as List<dynamic>? ?? const [];
+      // Never replace local reminders with an empty server list — that would
+      // cancel all pending notification alarms via _rescheduleReminderAlarms.
+      if (list.isEmpty && _manualReminders.isNotEmpty) {
+        debugPrint(
+          'reminder sync: server returned 0 reminders; keeping local list',
+        );
+        return;
+      }
       final remote = list.map((e) {
         final m = e as Map<String, dynamic>;
         final parsedAt =
@@ -597,6 +666,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _refreshCompanionVideoForLevel();
     });
+    unawaited(
+      GoogleFonts.pendingFonts(<TextStyle>[
+        GoogleFonts.greatVibes(fontSize: 20, color: Colors.white, height: 1.05),
+        GoogleFonts.greatVibes(fontSize: 24, color: Colors.white, height: 1.05),
+      ]),
+    );
   }
 
   @override
@@ -621,6 +696,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   double _getIconOpacity() {
     double fade = 1.0 - ((_navBarHeight - _minHeight) / 30);
     return fade.clamp(0.0, 1.0);
+  }
+
+  /// Bottom inset for the main scroll so the last cards stay above the docked
+  /// FAB + frosted nav (varies by screen height, text scale, and system bars).
+  double _homeScrollBottomPadding(BuildContext context) {
+    final safe = MediaQuery.viewPaddingOf(context).bottom;
+    final textScale = MediaQuery.textScalerOf(context).scale(1.0);
+    const baseReserve =
+        188.0; // centerDocked FAB + translated FAB + frosted nav row + margins
+    final largeTextExtra =
+        textScale > 1.0 ? 44.0 * (textScale - 1.0).clamp(0.0, 0.85) : 0.0;
+    return math.max(252.0, safe + baseReserve + largeTextExtra);
   }
 
   void _onPanelVerticalDragUpdate(DragUpdateDetails details) {
@@ -869,79 +956,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       top: scrollTopPadding,
                       left: 16,
                       right: 16,
-                      bottom: 210,
+                      bottom: _homeScrollBottomPadding(context),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        SizedBox(
-                          width: double.infinity,
-                          child: Column(
-                            children: [
-                              Icon(
-                                Icons.wb_sunny_rounded,
-                                color: const Color(0xFFFFB74D),
-                                size: 32,
-                                shadows: [
-                                  Shadow(
-                                    color: const Color(
-                                      0xFFFFB74D,
-                                    ).withOpacity(0.45),
-                                    blurRadius: 12,
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                              Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                ),
-                                child: Text.rich(
-                                  TextSpan(
-                                    children: [
-                                      TextSpan(
-                                        text: _greetingForNow(),
-                                        style: GoogleFonts.greatVibes(
-                                          fontSize: 20,
-                                          color: Colors.white,
-                                          height: 1.05,
-                                        ),
-                                      ),
-                                      TextSpan(
-                                        text: ', ',
-                                        style: GoogleFonts.greatVibes(
-                                          fontSize: 20,
-                                          color: Colors.white,
-                                          height: 1.05,
-                                        ),
-                                      ),
-                                      TextSpan(
-                                        text: HabitStore.instance.displayName,
-                                        style: GoogleFonts.greatVibes(
-                                          fontSize: 24,
-                                          color: Colors.white,
-                                          height: 1.05,
-                                        ),
-                                      ),
-                                      TextSpan(
-                                        text: '!',
-                                        style: GoogleFonts.greatVibes(
-                                          fontSize: 20,
-                                          color: Colors.white,
-                                          height: 1.05,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  textAlign: TextAlign.center,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 20),
+                        const SizedBox(height: 6),
                         _buildStatsCarousel(),
                         const SizedBox(height: 38),
                         AnimatedSwitcher(
@@ -988,14 +1008,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               if (_navBarHeight > _minHeight)
                 Positioned.fill(
                   child: IgnorePointer(
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(
-                        sigmaX: (1.0 - _calculateOpacity(maxHeight)) * 15,
-                        sigmaY: (1.0 - _calculateOpacity(maxHeight)) * 15,
-                      ),
-                      child: Container(
-                        color: Colors.black.withOpacity(
-                          0.2 * (1.0 - _calculateOpacity(maxHeight)),
+                    child: RepaintBoundary(
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(
+                          // Full-screen blur is expensive on GPU; cap sigma for smoother scrolling.
+                          sigmaX: (1.0 - _calculateOpacity(maxHeight)) * 8,
+                          sigmaY: (1.0 - _calculateOpacity(maxHeight)) * 8,
+                        ),
+                        child: Container(
+                          color: Colors.black.withOpacity(
+                            0.2 * (1.0 - _calculateOpacity(maxHeight)),
+                          ),
                         ),
                       ),
                     ),
@@ -1310,18 +1333,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 // Wave Animated Progress
                 ClipRRect(
                   borderRadius: BorderRadius.circular(12),
-                  child: AnimatedBuilder(
-                    animation: _waveController,
-                    builder: (context, child) {
-                      return CustomPaint(
-                        size: Size(barWidth, maxHeight),
-                        painter: WavePainter(
-                          color: color,
-                          progress: animatedProgress,
-                          waveValue: _waveController.value,
-                        ),
-                      );
-                    },
+                  child: RepaintBoundary(
+                    child: AnimatedBuilder(
+                      animation: _waveController,
+                      builder: (context, child) {
+                        return CustomPaint(
+                          size: Size(barWidth, maxHeight),
+                          painter: WavePainter(
+                            color: color,
+                            progress: animatedProgress,
+                            waveValue: _waveController.value,
+                          ),
+                        );
+                      },
+                    ),
                   ),
                 ),
               ],
@@ -1383,154 +1408,127 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final mq = MediaQuery.sizeOf(context);
     final carouselPageHeight = (mq.height * 0.22).clamp(172.0, 200.0);
 
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(30),
-        border: Border.all(color: Colors.white.withOpacity(0.2)),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SizedBox(
-            height: carouselPageHeight,
-            child: PageView.builder(
-              controller: _statsPageController,
-              itemCount: _statsPageCount,
-              // Default drag start so vertical drags can still drive the outer
-              // [SingleChildScrollView] when the gesture begins on the carousel.
-              physics: const PageScrollPhysics(),
-              padEnds: false,
-              onPageChanged: (i) {
-                setState(() => _statsPageIndex = i);
-                _syncCompanionLensPlayback(i);
-              },
-              itemBuilder: (context, i) {
-                if (i == 1) {
-                  return _buildReminderLensClockSummary();
-                }
-                if (i == 2) {
-                  return _buildCompanionLensSummary();
-                }
-                return Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      _buildVerticalStat(
-                        "current\nStreak",
-                        '${s.currentStreak}',
-                        curProg,
-                        Colors.orange,
-                      ),
-                      _buildVerticalStat(
-                        "Today's\nProgress",
-                        '${(tp * 100).round()}%',
-                        tp.clamp(0.0, 1.0),
-                        Colors.orange,
-                      ),
-                      _buildVerticalStat(
-                        "Focus\nTime",
-                        focusVal,
-                        (fm / 120.0).clamp(0.0, 1.0),
-                        Colors.orange,
-                        unit: focusUnit,
-                      ),
-                      _buildVerticalStat(
-                        "Best\nStreak",
-                        '${s.bestStreakRecorded}',
-                        bestProg,
-                        Colors.orange,
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: Text(
-              'Swipe · ${_statsSwipeLensLabel(_statsPageIndex)}',
-              textAlign: TextAlign.center,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: Colors.white.withOpacity(0.42),
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.3,
+    return RepaintBoundary(
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(30),
+          border: Border.all(color: Colors.white.withOpacity(0.2)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SizedBox(
+              height: carouselPageHeight,
+              child: PageView.builder(
+                controller: _statsPageController,
+                itemCount: _statsPageCount,
+                // Default drag start so vertical drags can still drive the outer
+                // [SingleChildScrollView] when the gesture begins on the carousel.
+                physics: const PageScrollPhysics(),
+                padEnds: false,
+                onPageChanged: (i) {
+                  setState(() => _statsPageIndex = i);
+                  _syncCompanionLensPlayback(i);
+                },
+                itemBuilder: (context, i) {
+                  if (i == 1) {
+                    return _buildReminderLensClockSummary();
+                  }
+                  if (i == 2) {
+                    return _buildCompanionLensSummary();
+                  }
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        _buildVerticalStat(
+                          "current\nStreak",
+                          '${s.currentStreak}',
+                          curProg,
+                          Colors.orange,
+                        ),
+                        _buildVerticalStat(
+                          "Today's\nProgress",
+                          '${(tp * 100).round()}%',
+                          tp.clamp(0.0, 1.0),
+                          Colors.orange,
+                        ),
+                        _buildVerticalStat(
+                          "Focus\nTime",
+                          focusVal,
+                          (fm / 120.0).clamp(0.0, 1.0),
+                          Colors.orange,
+                          unit: focusUnit,
+                        ),
+                        _buildVerticalStat(
+                          "Best\nStreak",
+                          '${s.bestStreakRecorded}',
+                          bestProg,
+                          Colors.orange,
+                        ),
+                      ],
+                    ),
+                  );
+                },
               ),
             ),
-          ),
-          const SizedBox(height: 4),
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: List.generate(_statsPageCount, (i) {
-                final on = i == _statsPageIndex;
-                return GestureDetector(
-                  onTap: () {
-                    _statsPageController.animateToPage(
-                      i,
-                      duration: const Duration(milliseconds: 320),
-                      curve: Curves.easeOutCubic,
-                    );
-                  },
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 220),
-                    margin: const EdgeInsets.symmetric(horizontal: 4),
-                    width: on ? 22 : 7,
-                    height: 7,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(99),
-                      color: on ? cyan : Colors.white.withOpacity(0.22),
-                    ),
-                  ),
-                );
-              }),
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                'Swipe · ${_statsSwipeLensLabel(_statsPageIndex)}',
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.42),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.3,
+                ),
+              ),
             ),
-          ),
-        ],
+            const SizedBox(height: 4),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(_statsPageCount, (i) {
+                  final on = i == _statsPageIndex;
+                  return GestureDetector(
+                    onTap: () {
+                      _statsPageController.animateToPage(
+                        i,
+                        duration: const Duration(milliseconds: 320),
+                        curve: Curves.easeOutCubic,
+                      );
+                    },
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 220),
+                      margin: const EdgeInsets.symmetric(horizontal: 4),
+                      width: on ? 22 : 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(99),
+                        color: on ? cyan : Colors.white.withOpacity(0.22),
+                      ),
+                    ),
+                  );
+                }),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildReminderLensClockSummary() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 12, 18, 6),
-      child: AnimatedBuilder(
-        animation: _waveController,
-        builder: (context, _) {
-          final now = DateTime.now();
-          return Column(
-            children: [
-              _buildAnalogReminderClock(now, size: 108),
-              const SizedBox(height: 6),
-              Text(
-                _formatReminderClock(now),
-                style: const TextStyle(
-                  color: Color(0xFF00D9FF),
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.8,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                'Reminder clock',
-                style: TextStyle(
-                  color: Colors.white.withOpacity(0.62),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          );
-        },
-      ),
+    return _ReminderLensClockTicker(
+      buildAnalog: (now) => _buildAnalogReminderClock(now, size: 108),
+      formatDigital: _formatReminderClock,
     );
   }
 
@@ -1774,8 +1772,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     const accent = Color(0xFF00D9FF);
     final canExpand = habits.length > _kMomentumPreviewLimit;
     final expanded = _momentumHabitListExpanded && canExpand;
-    final visibleCount =
-        expanded || !canExpand ? habits.length : _kMomentumPreviewLimit;
+    final visibleCount = expanded || !canExpand
+        ? habits.length
+        : _kMomentumPreviewLimit;
     final visibleHabits = habits.take(visibleCount).toList(growable: false);
 
     return Column(
@@ -1792,7 +1791,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 });
               },
               style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 1),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 1,
+                ),
                 minimumSize: const Size(0, 0),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 visualDensity: VisualDensity.compact,
@@ -2343,6 +2345,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     });
     unawaited(_persistRemindersState());
     unawaited(() async {
+      await ReminderAlarmService.instance.requestReminderPermissions();
       final alarmOk = await ReminderAlarmService.instance.scheduleDailyReminder(
         alarmId: reminder.alarmId,
         title: reminder.habitTitle,
@@ -2350,14 +2353,36 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         body: reminder.note,
       );
       if (!mounted) return;
+      var failDetail =
+          'Open Settings → Notifications for this app and allow alerts. On Android 12+, also allow Alarms & reminders if prompted.';
+      if (!alarmOk && defaultTargetPlatform == TargetPlatform.android) {
+        final notifOff = await ReminderAlarmService.instance
+            .androidNotificationsBlocked();
+        if (notifOff) {
+          failDetail =
+              'Notifications are off for this app. Turn them on, then save the reminder again.';
+        }
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
             alarmOk
                 ? 'Reminder alarm set for $habitTitle (${_formatTimeOfDay(_manualReminderTime)})'
-                : 'Reminder saved, but alarm permission is blocked. Enable notifications/exact alarms.',
+                : 'Reminder saved locally, but no OS alarm was scheduled. $failDetail',
           ),
           behavior: SnackBarBehavior.floating,
+          action: alarmOk
+              ? null
+              : SnackBarAction(
+                  label: 'Settings',
+                  onPressed: () {
+                    unawaited(
+                      AppSettings.openAppSettings(
+                        type: AppSettingsType.notification,
+                      ),
+                    );
+                  },
+                ),
         ),
       );
       final ok = await _saveReminderToServer(reminder);
@@ -2381,12 +2406,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final granted = await ReminderAlarmService.instance
         .requestReminderPermissions();
     if (!context.mounted) return;
+    if (!granted) {
+      await AppSettings.openAppSettings(type: AppSettingsType.notification);
+    }
+    if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
           granted
               ? 'Reminder permissions enabled. Alarms can ring on time.'
-              : 'Reminder permissions are still blocked. Enable notifications and exact alarms in settings.',
+              : 'Opened notification settings — enable alerts for this app, then try Set reminder again.',
         ),
         behavior: SnackBarBehavior.floating,
       ),
@@ -3100,7 +3129,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             child: _isRadialMenuOpen
                                 ? Container(
                                     decoration: BoxDecoration(
-                                      color: const Color(0xFF10142B).withOpacity(0.82),
+                                      color: const Color(
+                                        0xFF10142B,
+                                      ).withOpacity(0.82),
                                       gradient: LinearGradient(
                                         begin: Alignment.topLeft,
                                         end: Alignment.bottomRight,
@@ -3303,12 +3334,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       ];
     }
     final canExpand = store.habits.length > _kTodoPreviewLimit;
-    final visibleCount =
-        _showAllHomeHabits || !canExpand
-            ? store.habits.length
-            : _kTodoPreviewLimit;
-    final visibleHabits =
-        store.habits.take(visibleCount).toList(growable: false);
+    final visibleCount = _showAllHomeHabits || !canExpand
+        ? store.habits.length
+        : _kTodoPreviewLimit;
+    final visibleHabits = store.habits
+        .take(visibleCount)
+        .toList(growable: false);
 
     return [
       _habitGrid(context, visibleHabits),
@@ -3679,7 +3710,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
     const navRadius = 30.0;
     return Padding(
-      padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + bottomInset * 0.35),
+      padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + bottomInset),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(navRadius),
         child: BackdropFilter(
@@ -8270,5 +8301,9 @@ class WavePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant WavePainter oldDelegate) => true;
+  bool shouldRepaint(covariant WavePainter oldDelegate) {
+    return oldDelegate.waveValue != waveValue ||
+        (oldDelegate.progress - progress).abs() > 0.0005 ||
+        oldDelegate.color != color;
+  }
 }
