@@ -91,6 +91,12 @@ Color _accentForHabitCategory(String cat) {
   }
 }
 
+/// Home shell ([Scaffold]) — deep navy base.
+const Color _kHomeShellBg = Color(0xFF0F1023);
+
+/// Top header + bottom nav: tonal lift from [_kHomeShellBg], biased cyan to pair with the accent.
+const Color _kHomeNavChromeBg = Color(0xFF10182E);
+
 String _greetingForNow() {
   final h = DateTime.now().hour;
   if (h < 12) return 'Good morning';
@@ -813,14 +819,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       builder: (context, _) {
         if (!HabitStore.instance.isLoaded) {
           return const Scaffold(
-            backgroundColor: Color(0xFF0F1023),
+            backgroundColor: _kHomeShellBg,
             body: Center(
               child: CircularProgressIndicator(color: Color(0xFF00D9FF)),
             ),
           );
         }
         return Scaffold(
-          backgroundColor: const Color(0xFF0F1023),
+          backgroundColor: _kHomeShellBg,
           extendBody: true,
           bottomNavigationBar: _buildBottomNavBar(),
           floatingActionButton: Transform.translate(
@@ -1003,7 +1009,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 height: outerPanelHeight,
                 child: Container(
                   decoration: BoxDecoration(
-                    color: const Color(0xFF1A1B3A),
+                    color: _kHomeNavChromeBg,
                     borderRadius: BorderRadius.vertical(
                       bottom: Radius.circular(
                         _navBarHeight >= maxHeight ? 0 : 30,
@@ -3671,42 +3677,68 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Widget _buildBottomNavBar() {
     final isSocialLocked = _isSocialTemporarilyLocked;
     final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
+    const navRadius = 30.0;
     return Padding(
       padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + bottomInset * 0.35),
-      child: Container(
-        constraints: const BoxConstraints(minHeight: 72, maxHeight: 96),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1A1B3A),
-          borderRadius: BorderRadius.circular(30),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.4),
-              blurRadius: 20,
-              offset: const Offset(0, 10),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(navRadius),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 72, maxHeight: 96),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(navRadius),
+              border: Border.all(
+                width: 1,
+                color: Colors.white.withValues(alpha: 0.14),
+              ),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Colors.white.withValues(alpha: 0.14),
+                  _kHomeNavChromeBg.withValues(alpha: 0.5),
+                ],
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF000000).withValues(alpha: 0.45),
+                  blurRadius: 22,
+                  offset: const Offset(0, 10),
+                ),
+              ],
             ),
-          ],
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: [
-            _navItem(Icons.home, "Home", true),
-            _navItem(Icons.pie_chart, "stats", false, onTap: _showStatsPanel),
-            const SizedBox(width: 50),
-            _navItem(
-              Icons.calendar_today,
-              "Calendar",
-              false,
-              onTap: _showCalendarPanel,
+            child: Material(
+              color: Colors.transparent,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _navItem(Icons.home, "Home", true),
+                  _navItem(
+                    Icons.pie_chart,
+                    "stats",
+                    false,
+                    onTap: _showStatsPanel,
+                  ),
+                  const SizedBox(width: 50),
+                  _navItem(
+                    Icons.calendar_today,
+                    "Calendar",
+                    false,
+                    onTap: _showCalendarPanel,
+                  ),
+                  _navItem(
+                    isSocialLocked
+                        ? Icons.lock_outline_rounded
+                        : Icons.groups_rounded,
+                    "Social",
+                    false,
+                    onTap: _onSocialNavTap,
+                  ),
+                ],
+              ),
             ),
-            _navItem(
-              isSocialLocked
-                  ? Icons.lock_outline_rounded
-                  : Icons.groups_rounded,
-              "Social",
-              false,
-              onTap: _onSocialNavTap,
-            ),
-          ],
+          ),
         ),
       ),
     );
