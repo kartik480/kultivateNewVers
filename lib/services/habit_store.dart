@@ -30,16 +30,20 @@ class HabitStore extends ChangeNotifier {
   Timer? _dayRolloverTimer;
   String? _lastKnownDayKey;
 
-  static final RegExp _mongoIdRe = RegExp(r'^[a-f0-9]{24}$', caseSensitive: false);
+  static final RegExp _mongoIdRe = RegExp(
+    r'^[a-f0-9]{24}$',
+    caseSensitive: false,
+  );
 
   bool _looksLikeMongoId(String id) => _mongoIdRe.hasMatch(id);
 
   Map<String, String> _authHeaders(String token) => {
-        'content-type': 'application/json',
-        'Authorization': 'Bearer $token',
-      };
+    'content-type': 'application/json',
+    'Authorization': 'Bearer $token',
+  };
 
-  Uri _habitsUri(String path) => Uri.parse('${AuthService.baseurl}/api/habits$path');
+  Uri _habitsUri(String path) =>
+      Uri.parse('${AuthService.baseurl}/api/habits$path');
 
   void _applyRemoteState(Map<String, dynamic> data) {
     final list = data['habits'] as List<dynamic>? ?? [];
@@ -60,14 +64,16 @@ class HabitStore extends ChangeNotifier {
             category: '${m['category'] ?? 'focus'}',
             notes: parsedNotes,
             frequency: _normalizeFrequency('${m['frequency'] ?? 'daily'}'),
+            defaultTimerMinutes: (m['defaultTimerMinutes'] as num?)?.toInt(),
           );
         }),
       );
     _completionsByHabit.clear();
     final comp = data['completions'] as Map<String, dynamic>? ?? {};
     comp.forEach((hid, days) {
-      _completionsByHabit[hid] =
-          (days as List<dynamic>).map((e) => e.toString()).toSet();
+      _completionsByHabit[hid] = (days as List<dynamic>)
+          .map((e) => e.toString())
+          .toSet();
     });
   }
 
@@ -91,13 +97,18 @@ class HabitStore extends ChangeNotifier {
 
       if (remoteList.isEmpty && habits.isNotEmpty) {
         final habitPayload = habits
-            .map((h) => {
-                  'tempId': h.id,
-                  'title': h.title,
-                  'category': h.category,
-                  if (h.notes != null && h.notes!.trim().isNotEmpty) 'notes': h.notes!.trim(),
-                  'frequency': _normalizeFrequency(h.frequency),
-                })
+            .map(
+              (h) => {
+                'tempId': h.id,
+                'title': h.title,
+                'category': h.category,
+                if (h.notes != null && h.notes!.trim().isNotEmpty)
+                  'notes': h.notes!.trim(),
+                'frequency': _normalizeFrequency(h.frequency),
+                if (h.defaultTimerMinutes != null)
+                  'defaultTimerMinutes': h.defaultTimerMinutes,
+              },
+            )
             .toList();
         final compPayload = <String, dynamic>{};
         _completionsByHabit.forEach((id, set) {
@@ -150,7 +161,9 @@ class HabitStore extends ChangeNotifier {
     if (compRaw != null && compRaw.isNotEmpty) {
       final map = jsonDecode(compRaw) as Map<String, dynamic>;
       map.forEach((habitId, dates) {
-        _completionsByHabit[habitId] = (dates as List<dynamic>).map((e) => e.toString()).toSet();
+        _completionsByHabit[habitId] = (dates as List<dynamic>)
+            .map((e) => e.toString())
+            .toSet();
       });
     }
 
@@ -178,7 +191,10 @@ class HabitStore extends ChangeNotifier {
 
   Future<void> _persist() async {
     final p = await SharedPreferences.getInstance();
-    await p.setString(_kHabits, jsonEncode(habits.map((h) => h.toJson()).toList()));
+    await p.setString(
+      _kHabits,
+      jsonEncode(habits.map((h) => h.toJson()).toList()),
+    );
     final compMap = <String, dynamic>{};
     _completionsByHabit.forEach((id, set) {
       compMap[id] = set.toList();
@@ -190,15 +206,22 @@ class HabitStore extends ChangeNotifier {
   }
 
   Future<void> setSession({required String displayName, String? email}) async {
-    this.displayName = displayName.trim().isEmpty ? 'there' : displayName.trim();
+    this.displayName = displayName.trim().isEmpty
+        ? 'there'
+        : displayName.trim();
     this.email = email;
     await _persist();
     notifyListeners();
   }
 
   /// Call after successful sign-up (saves the name users typed).
-  Future<void> registerProfile({required String displayName, required String email}) async {
-    this.displayName = displayName.trim().isEmpty ? 'there' : displayName.trim();
+  Future<void> registerProfile({
+    required String displayName,
+    required String email,
+  }) async {
+    this.displayName = displayName.trim().isEmpty
+        ? 'there'
+        : displayName.trim();
     this.email = email.trim();
     await _persist();
     notifyListeners();
@@ -222,7 +245,11 @@ class HabitStore extends ChangeNotifier {
 
   double _avgCompletionBetween(int oldestDayOffset, int newestDayOffset) {
     if (habits.isEmpty) return 0;
-    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    final today = DateTime(
+      DateTime.now().year,
+      DateTime.now().month,
+      DateTime.now().day,
+    );
     var sum = 0.0;
     var n = 0;
     for (var o = oldestDayOffset; o <= newestDayOffset; o++) {
@@ -255,7 +282,9 @@ class HabitStore extends ChangeNotifier {
     if (habits.isEmpty) {
       return 'Tap + for the activity wheel, or Custom to add a habit by hand (name, notes, repeat, category). Completions power stats, calendar, and your score.';
     }
-    final left = habits.where((h) => !isCompletedOn(h.id, DateTime.now())).length;
+    final left = habits
+        .where((h) => !isCompletedOn(h.id, DateTime.now()))
+        .length;
     if (left == 0) {
       return 'All habits checked off today. Come back tomorrow or add another habit.';
     }
@@ -285,7 +314,11 @@ class HabitStore extends ChangeNotifier {
   int get currentStreak {
     if (habits.isEmpty) return 0;
     var streak = 0;
-    var d = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    var d = DateTime(
+      DateTime.now().year,
+      DateTime.now().month,
+      DateTime.now().day,
+    );
     while (_anyCompletionOn(d)) {
       streak++;
       d = d.subtract(const Duration(days: 1));
@@ -295,7 +328,11 @@ class HabitStore extends ChangeNotifier {
 
   /// Consecutive days this specific habit was completed (including today).
   int habitStreak(String habitId) {
-    var d = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    var d = DateTime(
+      DateTime.now().year,
+      DateTime.now().month,
+      DateTime.now().day,
+    );
     var n = 0;
     while (isCompletedOn(habitId, d)) {
       n++;
@@ -401,7 +438,11 @@ class HabitStore extends ChangeNotifier {
 
   List<double> last7DayIntensity() {
     final out = <double>[];
-    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    final today = DateTime(
+      DateTime.now().year,
+      DateTime.now().month,
+      DateTime.now().day,
+    );
     for (var i = 6; i >= 0; i--) {
       final d = today.subtract(Duration(days: i));
       if (habits.isEmpty) {
@@ -416,7 +457,11 @@ class HabitStore extends ChangeNotifier {
   /// Raw check-ins per day for the last 7 days, oldest -> newest.
   List<int> last7DayCheckinCounts() {
     final out = <int>[];
-    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    final today = DateTime(
+      DateTime.now().year,
+      DateTime.now().month,
+      DateTime.now().day,
+    );
     for (var i = 6; i >= 0; i--) {
       final d = today.subtract(Duration(days: i));
       out.add(countCompletedOn(d));
@@ -473,7 +518,11 @@ class HabitStore extends ChangeNotifier {
   Map<String, double> categoryCompletionFractionsLast7() {
     const keys = habitCategoryKeys;
     final counts = <String, int>{for (final k in keys) k: 0};
-    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    final today = DateTime(
+      DateTime.now().year,
+      DateTime.now().month,
+      DateTime.now().day,
+    );
     final startKey = _dateKey(today.subtract(const Duration(days: 6)));
     final endKey = _dateKey(today);
     var total = 0;
@@ -518,6 +567,7 @@ class HabitStore extends ChangeNotifier {
     required String category,
     String? notes,
     String frequency = 'daily',
+    int? defaultTimerMinutes,
   }) async {
     final t = title.trim();
     if (t.isEmpty) return;
@@ -537,6 +587,8 @@ class HabitStore extends ChangeNotifier {
             'category': category,
             'notes': noteStr ?? '',
             'frequency': freq,
+            if (defaultTimerMinutes != null)
+              'defaultTimerMinutes': defaultTimerMinutes,
           }),
         );
         if (res.statusCode == 201) {
@@ -554,6 +606,7 @@ class HabitStore extends ChangeNotifier {
             category: '${hb['category'] ?? 'focus'}',
             notes: mergedNotes,
             frequency: _normalizeFrequency('${hb['frequency'] ?? freq}'),
+            defaultTimerMinutes: (hb['defaultTimerMinutes'] as num?)?.toInt(),
           );
           habits.add(h);
           _completionsByHabit[h.id] ??= {};
@@ -574,6 +627,7 @@ class HabitStore extends ChangeNotifier {
       category: category,
       notes: noteStr,
       frequency: freq,
+      defaultTimerMinutes: defaultTimerMinutes,
     );
     habits.add(h);
     _completionsByHabit[h.id] ??= {};
@@ -602,9 +656,7 @@ class HabitStore extends ChangeNotifier {
     unawaited(_updateBestStreak());
 
     final token = await AuthService.getToken();
-    if (token != null &&
-        token.isNotEmpty &&
-        _looksLikeMongoId(habitId)) {
+    if (token != null && token.isNotEmpty && _looksLikeMongoId(habitId)) {
       try {
         final res = await http.post(
           _habitsUri('/$habitId/toggle'),
@@ -628,11 +680,12 @@ class HabitStore extends ChangeNotifier {
     }
   }
 
-  Future<void> removeHabit(String habitId) async {
+  Future<bool> removeHabit(String habitId) async {
     final token = await AuthService.getToken();
-    if (token != null &&
-        token.isNotEmpty &&
-        _looksLikeMongoId(habitId)) {
+    if (_looksLikeMongoId(habitId)) {
+      if (token == null || token.isEmpty) {
+        return false;
+      }
       try {
         final res = await http.delete(
           _habitsUri('/$habitId'),
@@ -644,12 +697,13 @@ class HabitStore extends ChangeNotifier {
           _toggleEpochByHabit.remove(habitId);
           await _persist();
           notifyListeners();
-          return;
+          return true;
         }
         if (res.statusCode == 401) await AuthService.saveToken(null);
       } catch (e, st) {
         debugPrint('removeHabit api: $e\n$st');
       }
+      return false;
     }
 
     habits.removeWhere((h) => h.id == habitId);
@@ -657,6 +711,44 @@ class HabitStore extends ChangeNotifier {
     _toggleEpochByHabit.remove(habitId);
     await _persist();
     notifyListeners();
+    return true;
+  }
+
+  Future<void> setHabitDefaultTimerMinutes(String habitId, int? minutes) async {
+    final normalized = minutes?.clamp(1, 240);
+    final idx = habits.indexWhere((h) => h.id == habitId);
+    if (idx < 0) return;
+    final old = habits[idx];
+    habits[idx] = old.copyWith(defaultTimerMinutes: normalized);
+    notifyListeners();
+    unawaited(_persist());
+
+    final token = await AuthService.getToken();
+    if (token != null && token.isNotEmpty && _looksLikeMongoId(habitId)) {
+      try {
+        final res = await http.patch(
+          _habitsUri('/$habitId'),
+          headers: _authHeaders(token),
+          body: jsonEncode({'defaultTimerMinutes': normalized}),
+        );
+        if (res.statusCode == 200) {
+          final map = jsonDecode(res.body) as Map<String, dynamic>;
+          final hb = map['habit'] as Map<String, dynamic>;
+          final i = habits.indexWhere((h) => h.id == habitId);
+          if (i >= 0) {
+            habits[i] = habits[i].copyWith(
+              defaultTimerMinutes: (hb['defaultTimerMinutes'] as num?)?.toInt(),
+            );
+            await _persist();
+            notifyListeners();
+          }
+          return;
+        }
+        if (res.statusCode == 401) await AuthService.saveToken(null);
+      } catch (e, st) {
+        debugPrint('set timer minutes api: $e\n$st');
+      }
+    }
   }
 
   /// Repeat field; persisted on server when logged in.
@@ -685,22 +777,46 @@ class Habit {
     required this.category,
     this.notes,
     this.frequency = 'daily',
+    this.defaultTimerMinutes,
   });
 
   final String id;
   final String title;
   final String category;
   final String? notes;
+
   /// `daily` | `weekdays` | `weekly` — synced when using the habits API.
   final String frequency;
+  final int? defaultTimerMinutes;
+
+  Habit copyWith({
+    String? title,
+    String? category,
+    String? notes,
+    String? frequency,
+    int? defaultTimerMinutes,
+    bool clearDefaultTimerMinutes = false,
+  }) {
+    return Habit(
+      id: id,
+      title: title ?? this.title,
+      category: category ?? this.category,
+      notes: notes ?? this.notes,
+      frequency: frequency ?? this.frequency,
+      defaultTimerMinutes: clearDefaultTimerMinutes
+          ? null
+          : (defaultTimerMinutes ?? this.defaultTimerMinutes),
+    );
+  }
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'title': title,
-        'category': category,
-        if (notes != null && notes!.isNotEmpty) 'notes': notes,
-        if (frequency != 'daily') 'frequency': frequency,
-      };
+    'id': id,
+    'title': title,
+    'category': category,
+    if (notes != null && notes!.isNotEmpty) 'notes': notes,
+    if (frequency != 'daily') 'frequency': frequency,
+    if (defaultTimerMinutes != null) 'defaultTimerMinutes': defaultTimerMinutes,
+  };
 
   factory Habit.fromJson(Map<String, dynamic> j) {
     return Habit(
@@ -709,6 +825,7 @@ class Habit {
       category: j['category'] as String? ?? 'focus',
       notes: j['notes'] as String?,
       frequency: j['frequency'] as String? ?? 'daily',
+      defaultTimerMinutes: (j['defaultTimerMinutes'] as num?)?.toInt(),
     );
   }
 }

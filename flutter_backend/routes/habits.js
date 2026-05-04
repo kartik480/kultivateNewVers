@@ -9,6 +9,14 @@ function normalizeFrequency(f) {
   return "daily";
 }
 
+function normalizeTimerMinutes(v) {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  const rounded = Math.round(n);
+  return Math.max(1, Math.min(240, rounded));
+}
+
 function habitToClient(h) {
   return {
     id: h._id.toString(),
@@ -16,6 +24,10 @@ function habitToClient(h) {
     category: h.category,
     notes: h.notes && String(h.notes).trim() ? String(h.notes).trim() : null,
     frequency: h.frequency || "daily",
+    defaultTimerMinutes:
+      Number.isFinite(Number(h.defaultTimerMinutes)) && h.defaultTimerMinutes != null
+        ? Number(h.defaultTimerMinutes)
+        : null,
   };
 }
 const HabitCompletion = require("../models/HabitCompletion");
@@ -79,6 +91,7 @@ router.post("/bootstrap", async (req, res) => {
         category: String(h.category),
         notes: notesRaw,
         frequency: normalizeFrequency(h.frequency),
+        defaultTimerMinutes: normalizeTimerMinutes(h.defaultTimerMinutes),
       });
       const tempId = h.tempId != null ? String(h.tempId) : doc._id.toString();
       idMap[tempId] = doc._id;
@@ -114,7 +127,7 @@ router.post("/bootstrap", async (req, res) => {
 
 router.post("/", async (req, res) => {
   try {
-    const { title, category, notes, frequency } = req.body;
+    const { title, category, notes, frequency, defaultTimerMinutes } = req.body;
     if (typeof title !== "string" || typeof category !== "string") {
       return res.status(400).json({ message: "title and category required" });
     }
@@ -128,6 +141,7 @@ router.post("/", async (req, res) => {
       category: category.trim() || "focus",
       notes: notesStr,
       frequency: normalizeFrequency(frequency),
+      defaultTimerMinutes: normalizeTimerMinutes(defaultTimerMinutes),
     });
     await recomputeUserStatsCache(req.userId);
     res.status(201).json({
@@ -149,7 +163,7 @@ router.patch("/:habitId", async (req, res) => {
     const habit = await Habit.findOne({ _id: habitId, userId: req.userId });
     if (!habit) return res.status(404).json({ message: "Habit not found" });
 
-    const { title, category, notes, frequency, isArchived } = req.body;
+    const { title, category, notes, frequency, isArchived, defaultTimerMinutes } = req.body;
     if (typeof title === "string") {
       const tt = title.trim();
       if (tt) habit.title = tt;
@@ -162,6 +176,9 @@ router.patch("/:habitId", async (req, res) => {
       else habit.notes = String(notes).trim();
     }
     if (frequency !== undefined) habit.frequency = normalizeFrequency(frequency);
+    if (Object.prototype.hasOwnProperty.call(req.body, "defaultTimerMinutes")) {
+      habit.defaultTimerMinutes = normalizeTimerMinutes(defaultTimerMinutes);
+    }
     if (typeof isArchived === "boolean") habit.isArchived = isArchived;
 
     await habit.save();

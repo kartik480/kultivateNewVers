@@ -2,6 +2,7 @@ import 'package:app_settings/app_settings.dart';
 import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ui';
@@ -302,6 +303,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   final TextEditingController _newTodoCtrl = TextEditingController();
   final List<_ManualReminder> _manualReminders = [];
   final List<_ReminderHistoryEntry> _reminderHistory = [];
+  final Map<String, int> _habitTimerInitialById = {};
+  final Map<String, int> _habitTimerRemainingById = {};
 
   int _alarmIdForReminder({
     required DateTime createdAt,
@@ -856,7 +859,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       barrierDismissible: false,
       barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
       barrierColor: Colors.transparent,
-      transitionDuration: Duration.zero,
+      transitionDuration: const Duration(milliseconds: 170),
+      transitionBuilder: (context, animation, _, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+          reverseCurve: Curves.easeInCubic,
+        );
+        return FadeTransition(
+          opacity: curved,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.985, end: 1.0).animate(curved),
+            child: child,
+          ),
+        );
+      },
       pageBuilder: (dialogContext, _, __) {
         return RadialActivityPickerOverlay(
           fabTopLeft: topLeft,
@@ -3353,8 +3370,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         Positioned.fill(
                           child: IgnorePointer(
                             ignoring: true,
-                            child: _isRadialMenuOpen
-                                ? Container(
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                // Keep the texture-mounted video alive; swapping it out
+                                // on each '+' tap caused noticeable frame drops.
+                                VideoPlayer(_babyDragonController),
+                                AnimatedOpacity(
+                                  duration: const Duration(milliseconds: 160),
+                                  curve: Curves.easeOutCubic,
+                                  opacity: _isRadialMenuOpen ? 1 : 0,
+                                  child: Container(
                                     decoration: BoxDecoration(
                                       color: const Color(
                                         0xFF10142B,
@@ -3368,8 +3394,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                         ],
                                       ),
                                     ),
-                                  )
-                                : VideoPlayer(_babyDragonController),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                         // Opaque to hit-testing so the parent scroll view receives drags
@@ -3678,7 +3706,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         flex: 1,
         backgroundColor: _kHabitSwipePaneBg,
         borderRadius: BorderRadius.zero,
-        onPressed: (c) => _habitSwipeFocusReminder(c, h),
+        onPressed: (c) => _habitSwipeOpenTimer(c, h),
         child: _habitSwipeActionTile(
           icon: Icons.schedule_rounded,
           label: 'Timer',
@@ -3715,28 +3743,523 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     ];
   }
 
-  void _habitSwipeFocusReminder(BuildContext actionContext, Habit h) {
+  void _habitSwipeOpenTimer(BuildContext actionContext, Habit h) {
     unawaited(Slidable.of(actionContext)?.close());
     if (!mounted) return;
-    setState(() {
-      _manualReminderHabitCtrl.text = h.title;
-      _selectedManualReminderHabit = h;
+    _showHabitTimerPanel(h);
+  }
+
+  void _showHabitTimerPanel(Habit habit) {
+    final accent = _accentForHabitCategory(habit.category);
+    final title = habit.title.trim();
+    final persistedSeconds =
+        ((habit.defaultTimerMinutes ?? 25).clamp(1, 120)) * 60;
+    final initialSeconds =
+        (_habitTimerInitialById[habit.id] ?? persistedSeconds).clamp(
+          60,
+          120 * 60,
+        );
+    var totalSeconds = initialSeconds;
+    var remainingSeconds =
+        (_habitTimerRemainingById[habit.id] ?? initialSeconds).clamp(
+          0,
+          120 * 60,
+        );
+    var running = false;
+    Timer? ticker;
+
+    String fmt(int sec) {
+      final m = (sec ~/ 60).toString().padLeft(2, '0');
+      final s = (sec % 60).toString().padLeft(2, '0');
+      return '$m:$s';
+    }
+
+    void stopTimer() {
+      ticker?.cancel();
+      ticker = null;
+      running = false;
+    }
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (sheetContext, setSheetState) {
+            final progress = totalSeconds <= 0
+                ? 0.0
+                : (remainingSeconds / totalSeconds).clamp(0.0, 1.0);
+            return Container(
+              margin: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+              padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+              decoration: BoxDecoration(
+                color: const Color(0xFF131A30),
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: Colors.white.withOpacity(0.12)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.5),
+                    blurRadius: 26,
+                    offset: const Offset(0, 14),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 34,
+                        height: 34,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: accent.withOpacity(0.18),
+                          border: Border.all(color: accent.withOpacity(0.45)),
+                        ),
+                        child: Icon(
+                          Icons.schedule_rounded,
+                          color: accent,
+                          size: 18,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          title.isEmpty ? 'Habit Timer' : '$title timer',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.pop(sheetContext),
+                        icon: Icon(
+                          Icons.close_rounded,
+                          color: Colors.white.withOpacity(0.68),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(999),
+                    child: LinearProgressIndicator(
+                      minHeight: 9,
+                      value: progress,
+                      backgroundColor: Colors.white.withOpacity(0.09),
+                      valueColor: AlwaysStoppedAnimation<Color>(accent),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Center(
+                    child: Text(
+                      fmt(remainingSeconds),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 46,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.0,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _timerChip(
+                        label: '-1m',
+                        onTap: () {
+                          if (running) return;
+                          setSheetState(() {
+                            totalSeconds = (totalSeconds - 60).clamp(
+                              60,
+                              120 * 60,
+                            );
+                            remainingSeconds = remainingSeconds.clamp(
+                              0,
+                              totalSeconds,
+                            );
+                          });
+                        },
+                      ),
+                      _timerChip(
+                        label: '+1m',
+                        onTap: () {
+                          if (running) return;
+                          setSheetState(() {
+                            totalSeconds = (totalSeconds + 60).clamp(
+                              60,
+                              120 * 60,
+                            );
+                            remainingSeconds = remainingSeconds.clamp(
+                              0,
+                              totalSeconds,
+                            );
+                          });
+                        },
+                      ),
+                      _timerChip(
+                        label: 'Reset',
+                        onTap: () {
+                          setSheetState(() {
+                            stopTimer();
+                            remainingSeconds = totalSeconds;
+                          });
+                        },
+                      ),
+                      _timerChip(
+                        label: 'Set',
+                        onTap: () async {
+                          if (running) return;
+                          final ctrl = TextEditingController(
+                            text: (totalSeconds ~/ 60).toString(),
+                          );
+                          final picked = await showDialog<int?>(
+                            context: sheetContext,
+                            builder: (ctx) => AlertDialog(
+                              backgroundColor: const Color(0xFF1A1B3A),
+                              title: const Text(
+                                'Set timer (minutes)',
+                                style: TextStyle(color: Colors.white),
+                              ),
+                              content: TextField(
+                                controller: ctrl,
+                                keyboardType: TextInputType.number,
+                                style: const TextStyle(color: Colors.white),
+                                autofocus: true,
+                                decoration: InputDecoration(
+                                  hintText: '1-120',
+                                  hintStyle: TextStyle(
+                                    color: Colors.white.withOpacity(0.45),
+                                  ),
+                                  filled: true,
+                                  fillColor: const Color(0xFF0F1023),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: BorderSide(
+                                      color: Colors.white.withOpacity(0.14),
+                                    ),
+                                  ),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: BorderSide(
+                                      color: Colors.white.withOpacity(0.14),
+                                    ),
+                                  ),
+                                  focusedBorder: const OutlineInputBorder(
+                                    borderRadius: BorderRadius.all(
+                                      Radius.circular(12),
+                                    ),
+                                    borderSide: BorderSide(
+                                      color: Color(0xFF00D9FF),
+                                      width: 1.2,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(ctx, null),
+                                  child: const Text('Cancel'),
+                                ),
+                                TextButton(
+                                  onPressed: () {
+                                    final minutes = int.tryParse(
+                                      ctrl.text.trim(),
+                                    );
+                                    if (minutes == null) return;
+                                    Navigator.pop(ctx, minutes.clamp(1, 120));
+                                  },
+                                  child: const Text('Set'),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (picked == null || !sheetContext.mounted) return;
+                          setSheetState(() {
+                            totalSeconds = picked * 60;
+                            remainingSeconds = totalSeconds;
+                          });
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: () {
+                            setSheetState(() {
+                              if (running) {
+                                stopTimer();
+                              } else {
+                                if (remainingSeconds <= 0) {
+                                  remainingSeconds = totalSeconds;
+                                }
+                                running = true;
+                                ticker?.cancel();
+                                ticker = Timer.periodic(
+                                  const Duration(seconds: 1),
+                                  (_) {
+                                    if (!sheetContext.mounted) {
+                                      stopTimer();
+                                      return;
+                                    }
+                                    setSheetState(() {
+                                      remainingSeconds = (remainingSeconds - 1)
+                                          .clamp(0, 120 * 60);
+                                      if (remainingSeconds <= 0) {
+                                        stopTimer();
+                                        final store = HabitStore.instance;
+                                        final alreadyDone = store.isCompletedOn(
+                                          habit.id,
+                                          DateTime.now(),
+                                        );
+                                        if (!alreadyDone) {
+                                          store.toggleCompleteToday(habit.id);
+                                        }
+                                        if (mounted) {
+                                          unawaited(
+                                            _showTimerTimeUpDialog(
+                                              title: title.isEmpty
+                                                  ? 'Habit'
+                                                  : title,
+                                              accent: accent,
+                                            ),
+                                          );
+                                        }
+                                      }
+                                    });
+                                  },
+                                );
+                              }
+                            });
+                          },
+                          icon: Icon(
+                            running
+                                ? Icons.pause_rounded
+                                : Icons.play_arrow_rounded,
+                          ),
+                          label: Text(running ? 'Pause' : 'Start'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: accent.withOpacity(0.24),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 13),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                              side: BorderSide(color: accent.withOpacity(0.55)),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () {
+                            stopTimer();
+                            _habitTimerInitialById[habit.id] = totalSeconds;
+                            _habitTimerRemainingById[habit.id] =
+                                remainingSeconds;
+                            final saveMinutes = (totalSeconds ~/ 60).clamp(
+                              1,
+                              120,
+                            );
+                            unawaited(
+                              HabitStore.instance.setHabitDefaultTimerMinutes(
+                                habit.id,
+                                saveMinutes,
+                              ),
+                            );
+                            Navigator.pop(sheetContext);
+                          },
+                          icon: const Icon(Icons.check_circle_outline_rounded),
+                          label: const Text('Save'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.white.withOpacity(0.9),
+                            side: BorderSide(
+                              color: Colors.white.withOpacity(0.24),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 13),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    ).whenComplete(() {
+      stopTimer();
+      _habitTimerInitialById[habit.id] = totalSeconds;
+      _habitTimerRemainingById[habit.id] = remainingSeconds;
     });
-    _statsPageController.animateToPage(
-      1,
-      duration: const Duration(milliseconds: 340),
-      curve: Curves.easeOutCubic,
-    );
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          'Pick a time, then tap “Set reminder” for “${h.title}”.',
-          style: const TextStyle(fontWeight: FontWeight.w600),
+  }
+
+  Widget _timerChip({required String label, required VoidCallback onTap}) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(999),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(999),
+          color: Colors.white.withOpacity(0.06),
+          border: Border.all(color: Colors.white.withOpacity(0.15)),
         ),
-        behavior: SnackBarBehavior.floating,
-        backgroundColor: const Color(0xFF1A1B3A),
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
       ),
     );
+  }
+
+  Future<void> _showTimerTimeUpDialog({
+    required String title,
+    required Color accent,
+  }) async {
+    if (!mounted) return;
+
+    final player = AudioPlayer();
+    try {
+      await player.setReleaseMode(ReleaseMode.loop);
+      await player.play(AssetSource('sound/glory.mp3'));
+    } catch (e, st) {
+      debugPrint('timer glory sound: $e\n$st');
+    }
+
+    try {
+      await showGeneralDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        barrierLabel: 'Timer complete',
+        barrierColor: Colors.black.withOpacity(0.62),
+        transitionDuration: const Duration(milliseconds: 240),
+        pageBuilder: (ctx, _, __) {
+          return Center(
+            child: Material(
+              color: Colors.transparent,
+              child: Container(
+                width: 320,
+                margin: const EdgeInsets.symmetric(horizontal: 24),
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(24),
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFF1A1F3D), Color(0xFF10172E)],
+                  ),
+                  border: Border.all(color: Colors.white.withOpacity(0.16)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: accent.withOpacity(0.25),
+                      blurRadius: 26,
+                      spreadRadius: -4,
+                      offset: const Offset(0, 14),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 58,
+                      height: 58,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: accent.withOpacity(0.22),
+                        border: Border.all(color: accent.withOpacity(0.75), width: 1.5),
+                      ),
+                      child: Icon(Icons.alarm_on_rounded, color: accent, size: 30),
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      "Time's up!",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 26,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                    const SizedBox(height: 7),
+                    Text(
+                      '$title timer completed.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.82),
+                        fontSize: 14,
+                        height: 1.35,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: accent.withOpacity(0.24),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(13),
+                            side: BorderSide(color: accent.withOpacity(0.65)),
+                          ),
+                        ),
+                        child: const Text(
+                          'Dismiss',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+        transitionBuilder: (ctx, animation, _, child) {
+          final curved = CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutBack,
+            reverseCurve: Curves.easeInCubic,
+          );
+          return FadeTransition(
+            opacity: curved,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.9, end: 1.0).animate(curved),
+              child: child,
+            ),
+          );
+        },
+      );
+    } finally {
+      try {
+        await player.stop();
+      } catch (_) {}
+      await player.dispose();
+    }
   }
 
   void _habitSwipeTick(BuildContext actionContext, Habit h) {
@@ -3772,7 +4295,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ],
       ),
     );
-    if (ok == true && mounted) await HabitStore.instance.removeHabit(h.id);
+    if (ok == true && mounted) {
+      final deleted = await HabitStore.instance.removeHabit(h.id);
+      if (!deleted && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Could not delete on server. Check login/server and try again.',
+            ),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
   }
 
   Widget _habitTile(BuildContext context, Habit h) {
@@ -3831,7 +4366,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   ],
                 ),
               );
-              if (ok == true) await store.removeHabit(h.id);
+              if (ok == true) {
+                final deleted = await store.removeHabit(h.id);
+                if (!deleted && mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Could not delete on server. Check login/server and try again.',
+                      ),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                }
+              }
             },
             child: Container(
               decoration: BoxDecoration(
@@ -7133,6 +7680,25 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
     return _titleCtrl.text.trim().isNotEmpty;
   }
 
+  int? _selectedDefaultTimerMinutes() {
+    switch (_category) {
+      case 'focus':
+        return _focusMinutes;
+      case 'move':
+        return _moveMinutes;
+      case 'mind':
+        return _mindMinutes;
+      case 'learn':
+        return _learnMinutes;
+      case 'gym':
+        return _gymMinutes;
+      case 'creative':
+        return _creativeMinutes;
+      default:
+        return null;
+    }
+  }
+
   Future<void> _submit() async {
     if (!_canSubmit) return;
     var t = _titleCtrl.text.trim();
@@ -7145,6 +7711,7 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
       category: _category,
       notes: notesRaw.isEmpty ? null : notesRaw,
       frequency: _frequency,
+      defaultTimerMinutes: _selectedDefaultTimerMinutes(),
     );
     if (!mounted) return;
     Navigator.of(context).pop();
@@ -7239,6 +7806,103 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
             ),
           ),
       ],
+    );
+  }
+
+  Widget _manualDurationControl({
+    required String label,
+    required int? currentMinutes,
+    required void Function(int?) onSet,
+    int minMinutes = 1,
+    int maxMinutes = 240,
+  }) {
+    const cyan = Color(0xFF00D9FF);
+    return Align(
+      alignment: Alignment.centerRight,
+      child: TextButton.icon(
+        onPressed: () async {
+          final ctrl = TextEditingController(
+            text: currentMinutes != null ? '$currentMinutes' : '',
+          );
+          final picked = await showDialog<int?>(
+            context: context,
+            builder: (ctx) {
+              return AlertDialog(
+                backgroundColor: const Color(0xFF1A1B3A),
+                title: Text(
+                  'Set $label manually',
+                  style: const TextStyle(color: Colors.white),
+                ),
+                content: TextField(
+                  controller: ctrl,
+                  keyboardType: TextInputType.number,
+                  style: const TextStyle(color: Colors.white),
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    hintText: '$minMinutes-$maxMinutes minutes',
+                    hintStyle: TextStyle(color: Colors.white.withOpacity(0.45)),
+                    filled: true,
+                    fillColor: const Color(0xFF0F1023),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(
+                        color: Colors.white.withOpacity(0.14),
+                      ),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(
+                        color: Colors.white.withOpacity(0.14),
+                      ),
+                    ),
+                    focusedBorder: const OutlineInputBorder(
+                      borderRadius: BorderRadius.all(Radius.circular(12)),
+                      borderSide: BorderSide(color: cyan, width: 1.2),
+                    ),
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, null),
+                    child: const Text('Cancel'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, -1),
+                    child: const Text('Clear'),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      final raw = ctrl.text.trim();
+                      final n = int.tryParse(raw);
+                      if (n == null) return;
+                      Navigator.pop(ctx, n.clamp(minMinutes, maxMinutes));
+                    },
+                    child: const Text('Set'),
+                  ),
+                ],
+              );
+            },
+          );
+          if (!mounted || picked == null) return;
+          setState(() {
+            if (picked == -1) {
+              onSet(null);
+            } else {
+              onSet(picked);
+            }
+          });
+        },
+        icon: const Icon(Icons.tune_rounded, size: 16),
+        label: Text(
+          currentMinutes == null
+              ? 'Set manually'
+              : 'Manual: ${currentMinutes}m',
+        ),
+        style: TextButton.styleFrom(
+          foregroundColor: cyan,
+          textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+        ),
+      ),
     );
   }
 
@@ -7339,6 +8003,12 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
               label: (m) => '${m}m',
               onSelect: (v) => _focusMinutes = v,
             ),
+            const SizedBox(height: 6),
+            _manualDurationControl(
+              label: 'focus duration',
+              currentMinutes: _focusMinutes,
+              onSet: (v) => _focusMinutes = v,
+            ),
             const SizedBox(height: 18),
             Text(
               'Start cue',
@@ -7408,6 +8078,12 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
               label: (m) => '${m}m',
               onSelect: (v) => _moveMinutes = v,
             ),
+            const SizedBox(height: 6),
+            _manualDurationControl(
+              label: 'movement duration',
+              currentMinutes: _moveMinutes,
+              onSet: (v) => _moveMinutes = v,
+            ),
             const SizedBox(height: 18),
             Text(
               'Effort',
@@ -7469,6 +8145,12 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
               selected: _mindMinutes,
               label: (m) => '${m}m',
               onSelect: (v) => _mindMinutes = v,
+            ),
+            const SizedBox(height: 6),
+            _manualDurationControl(
+              label: 'mindful length',
+              currentMinutes: _mindMinutes,
+              onSet: (v) => _mindMinutes = v,
             ),
             const SizedBox(height: 18),
             Text(
@@ -7532,6 +8214,12 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
               selected: _learnMinutes,
               label: (m) => '${m}m',
               onSelect: (v) => _learnMinutes = v,
+            ),
+            const SizedBox(height: 6),
+            _manualDurationControl(
+              label: 'session size',
+              currentMinutes: _learnMinutes,
+              onSet: (v) => _learnMinutes = v,
             ),
             const SizedBox(height: 18),
             TextField(
@@ -7606,6 +8294,12 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
               selected: _gymMinutes,
               label: (m) => '${m}m',
               onSelect: (v) => _gymMinutes = v,
+            ),
+            const SizedBox(height: 6),
+            _manualDurationControl(
+              label: 'gym duration',
+              currentMinutes: _gymMinutes,
+              onSet: (v) => _gymMinutes = v,
             ),
             const SizedBox(height: 18),
             Text(
@@ -7835,6 +8529,12 @@ class _HabitCreateSheetState extends State<_HabitCreateSheet> {
               selected: _creativeMinutes,
               label: (m) => '${m}m',
               onSelect: (v) => _creativeMinutes = v,
+            ),
+            const SizedBox(height: 6),
+            _manualDurationControl(
+              label: 'creative session',
+              currentMinutes: _creativeMinutes,
+              onSet: (v) => _creativeMinutes = v,
             ),
           ],
         );
@@ -8299,6 +8999,7 @@ class _RadialActivityPickerOverlayState
   late final AnimationController _orbitController;
   late final Animation<double> _expand;
   bool _dismissing = false;
+  bool _orbitActive = false;
 
   static const List<(String label, IconData icon)> _activities =
       _kActivityPresets;
@@ -8308,22 +9009,38 @@ class _RadialActivityPickerOverlayState
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 560),
+      duration: const Duration(milliseconds: 360),
     );
     _orbitController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 18),
-    )..repeat();
+    );
     _expand = CurvedAnimation(
       parent: _controller,
       curve: Curves.easeOutCubic,
       reverseCurve: Curves.easeInCubic,
     );
+    _controller.addStatusListener(_onExpandStatusChanged);
     _controller.forward();
+  }
+
+  void _onExpandStatusChanged(AnimationStatus status) {
+    if (!mounted) return;
+    if (status == AnimationStatus.completed) {
+      if (_orbitActive) return;
+      _orbitActive = true;
+      _orbitController.repeat();
+    } else if (status == AnimationStatus.reverse ||
+        status == AnimationStatus.dismissed) {
+      if (!_orbitActive) return;
+      _orbitActive = false;
+      _orbitController.stop();
+    }
   }
 
   @override
   void dispose() {
+    _controller.removeStatusListener(_onExpandStatusChanged);
     _controller.dispose();
     _orbitController.dispose();
     super.dispose();
@@ -8386,7 +9103,7 @@ class _RadialActivityPickerOverlayState
             fit: StackFit.expand,
             children: [
               BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+                filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
                 child: Container(color: Colors.black.withOpacity(0.18)),
               ),
               IgnorePointer(
@@ -8421,7 +9138,8 @@ class _RadialActivityPickerOverlayState
           animation: Listenable.merge([_expand, _orbitController]),
           builder: (context, child) {
             final t = _expand.value;
-            final orbitPhase = _orbitController.value * 2 * math.pi;
+            final orbitPhase =
+                (_orbitActive ? _orbitController.value : 0.0) * 2 * math.pi;
             // Hub slides from + button to screen center; arc radius grows with same progress.
             final curHubX = fabCx + (hubCx - fabCx) * t;
             final curHubY = fabCy + (hubCy - fabCy) * t;

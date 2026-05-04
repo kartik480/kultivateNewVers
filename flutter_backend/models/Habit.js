@@ -18,6 +18,13 @@ const HabitSchema = new mongoose.Schema(
       enum: ["daily", "weekdays", "weekly"],
       default: "daily",
     },
+    /// Optional preferred timer length for this habit (minutes, 1..240).
+    defaultTimerMinutes: {
+      type: Number,
+      min: 1,
+      max: 240,
+      default: null,
+    },
     /// Soft-archive without deleting completions history (optional future use).
     isArchived: { type: Boolean, default: false, index: true },
   },
