@@ -15,6 +15,7 @@ import 'package:kultivate_new_ver/services/auth_service.dart';
 import 'package:kultivate_new_ver/services/habit_store.dart';
 import 'package:kultivate_new_ver/services/reminder_alarm_service.dart';
 import 'package:kultivate_new_ver/services/todo_store.dart';
+import 'package:flutter_slidable/flutter_slidable.dart';
 
 String _categoryForRadialLabel(String label) {
   switch (label) {
@@ -717,8 +718,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final textScale = MediaQuery.textScalerOf(context).scale(1.0);
     const baseReserve =
         188.0; // centerDocked FAB + translated FAB + frosted nav row + margins
-    final largeTextExtra =
-        textScale > 1.0 ? 44.0 * (textScale - 1.0).clamp(0.0, 0.85) : 0.0;
+    final largeTextExtra = textScale > 1.0
+        ? 44.0 * (textScale - 1.0).clamp(0.0, 0.85)
+        : 0.0;
     return math.max(252.0, safe + baseReserve + largeTextExtra);
   }
 
@@ -1966,7 +1968,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             color: Colors.transparent,
                             child: InkWell(
                               borderRadius: BorderRadius.circular(14),
-                              onTap: () => unawaited(todoStore.toggleDone(task.id)),
+                              onTap: () =>
+                                  unawaited(todoStore.toggleDone(task.id)),
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 10,
@@ -1992,7 +1995,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                           activeColor: accent,
                                           checkColor: const Color(0xFF0F1023),
                                           side: BorderSide(
-                                            color: Colors.white.withOpacity(0.35),
+                                            color: Colors.white.withOpacity(
+                                              0.35,
+                                            ),
                                             width: 1.5,
                                           ),
                                           materialTapTargetSize:
@@ -2021,16 +2026,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                           decorationStyle:
                                               TextDecorationStyle.solid,
                                           decorationColor: done
-                                              ? const Color(0xFFB8C4FF)
-                                                  .withOpacity(0.95)
+                                              ? const Color(
+                                                  0xFFB8C4FF,
+                                                ).withOpacity(0.95)
                                               : null,
-                                          decorationThickness: done ? 2.75 : null,
+                                          decorationThickness: done
+                                              ? 2.75
+                                              : null,
                                         ),
                                       ),
                                     ),
                                     IconButton(
-                                      onPressed: () =>
-                                          unawaited(todoStore.removeTask(task.id)),
+                                      onPressed: () => unawaited(
+                                        todoStore.removeTask(task.id),
+                                      ),
                                       icon: Icon(
                                         Icons.close_rounded,
                                         size: 20,
@@ -3585,17 +3594,186 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   /// Habit list on the home panel — full-width row cards (not a grid).
   Widget _habitGrid(BuildContext context, List<Habit> habits) {
-    return ListView.separated(
-      padding: EdgeInsets.zero,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: habits.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 14),
-      itemBuilder: (context, index) => _habitTile(context, habits[index]),
+    return SlidableAutoCloseBehavior(
+      child: ListView.separated(
+        padding: EdgeInsets.zero,
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: habits.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 14),
+        itemBuilder: (context, index) => _habitTile(context, habits[index]),
+      ),
     );
   }
 
   static const Color _kHabitCardTeal = Color(0xFF2DD4BF);
+
+  static const String _kHabitSwipeGroup = 'home-habit-cards';
+
+  /// One tone behind all swipe buttons — avoids striped / mismatched columns.
+  static const Color _kHabitSwipePaneBg = Color(0xFF0C111D);
+
+  Widget _habitSwipeActionTile({
+    required IconData icon,
+    required String label,
+    required Color accent,
+    required bool showDividerRight,
+  }) {
+    return Container(
+      width: double.infinity,
+      height: double.infinity,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      decoration: BoxDecoration(
+        color: _kHabitSwipePaneBg,
+        border: showDividerRight
+            ? Border(right: BorderSide(color: Colors.white.withOpacity(0.07)))
+            : null,
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: accent.withOpacity(0.18),
+              border: Border.all(color: accent.withOpacity(0.42), width: 1.2),
+              boxShadow: [
+                BoxShadow(
+                  color: accent.withOpacity(0.2),
+                  blurRadius: 12,
+                  spreadRadius: -2,
+                ),
+              ],
+            ),
+            child: Icon(icon, color: accent, size: 22),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.92),
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.2,
+              height: 1.05,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _habitSwipeActions(Habit h) {
+    const tickAccent = Color(0xFF5CEAD4);
+    const timerAccent = Color(0xFF00D9FF);
+    const deleteAccent = Color(0xFFFF6B86);
+    return [
+      CustomSlidableAction(
+        padding: EdgeInsets.zero,
+        flex: 1,
+        backgroundColor: _kHabitSwipePaneBg,
+        borderRadius: BorderRadius.zero,
+        onPressed: (c) => _habitSwipeFocusReminder(c, h),
+        child: _habitSwipeActionTile(
+          icon: Icons.schedule_rounded,
+          label: 'Timer',
+          accent: timerAccent,
+          showDividerRight: true,
+        ),
+      ),
+      CustomSlidableAction(
+        padding: EdgeInsets.zero,
+        flex: 1,
+        backgroundColor: _kHabitSwipePaneBg,
+        borderRadius: BorderRadius.zero,
+        onPressed: (c) => _habitSwipeTick(c, h),
+        child: _habitSwipeActionTile(
+          icon: Icons.check_rounded,
+          label: 'Tick',
+          accent: tickAccent,
+          showDividerRight: true,
+        ),
+      ),
+      CustomSlidableAction(
+        padding: EdgeInsets.zero,
+        flex: 1,
+        backgroundColor: _kHabitSwipePaneBg,
+        borderRadius: BorderRadius.zero,
+        onPressed: (c) => unawaited(_habitSwipeDelete(c, h)),
+        child: _habitSwipeActionTile(
+          icon: Icons.delete_outline_rounded,
+          label: 'Delete',
+          accent: deleteAccent,
+          showDividerRight: false,
+        ),
+      ),
+    ];
+  }
+
+  void _habitSwipeFocusReminder(BuildContext actionContext, Habit h) {
+    unawaited(Slidable.of(actionContext)?.close());
+    if (!mounted) return;
+    setState(() {
+      _manualReminderHabitCtrl.text = h.title;
+      _selectedManualReminderHabit = h;
+    });
+    _statsPageController.animateToPage(
+      1,
+      duration: const Duration(milliseconds: 340),
+      curve: Curves.easeOutCubic,
+    );
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Pick a time, then tap “Set reminder” for “${h.title}”.',
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: const Color(0xFF1A1B3A),
+      ),
+    );
+  }
+
+  void _habitSwipeTick(BuildContext actionContext, Habit h) {
+    unawaited(Slidable.of(actionContext)?.close());
+    HabitStore.instance.toggleCompleteToday(h.id);
+  }
+
+  Future<void> _habitSwipeDelete(BuildContext actionContext, Habit h) async {
+    final ctrl = Slidable.of(actionContext);
+    if (ctrl != null) await ctrl.close();
+    if (!mounted) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1B3A),
+        title: const Text(
+          'Remove habit?',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: Text(
+          'Delete “${h.title}” and its history?',
+          style: TextStyle(color: Colors.white.withOpacity(0.8)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true && mounted) await HabitStore.instance.removeHabit(h.id);
+  }
 
   Widget _habitTile(BuildContext context, Habit h) {
     final store = HabitStore.instance;
@@ -3607,229 +3785,259 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     const pad = 18.0;
     const stripeW = 14.0;
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(radius),
-        onTap: () => store.toggleCompleteToday(h.id),
-        onLongPress: () async {
-          final ok = await showDialog<bool>(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              backgroundColor: const Color(0xFF1A1B3A),
-              title: const Text(
-                'Remove habit?',
-                style: TextStyle(color: Colors.white),
-              ),
-              content: Text(
-                'Delete “${h.title}” and its history?',
-                style: TextStyle(color: Colors.white.withOpacity(0.8)),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx, false),
-                  child: const Text('Cancel'),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx, true),
-                  child: const Text('Delete'),
-                ),
-              ],
-            ),
-          );
-          if (ok == true) await store.removeHabit(h.id);
-        },
-        child: Container(
-          decoration: BoxDecoration(
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(radius),
+      child: Slidable(
+        key: ValueKey('habit-slide-${h.id}'),
+        groupTag: _kHabitSwipeGroup,
+        closeOnScroll: true,
+        startActionPane: ActionPane(
+          motion: const DrawerMotion(),
+          extentRatio: 0.5,
+          children: _habitSwipeActions(h),
+        ),
+        endActionPane: ActionPane(
+          motion: const DrawerMotion(),
+          extentRatio: 0.5,
+          children: _habitSwipeActions(h),
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
             borderRadius: BorderRadius.circular(radius),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.45),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
-                spreadRadius: -4,
-              ),
-              if (done)
-                BoxShadow(
-                  color: _kHabitCardTeal.withOpacity(0.22),
-                  blurRadius: 18,
-                  offset: const Offset(0, 6),
-                  spreadRadius: -2,
-                ),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(radius),
-            child: Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Color(0xFF0F1628),
-                    Color(0xFF121C32),
-                    Color(0xFF152A45),
-                  ],
-                  stops: [0.0, 0.45, 1.0],
-                ),
-              ),
-              child: IntrinsicHeight(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 16, 8, 16),
-                      child: Container(
-                        width: stripeW,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(stripeW / 2),
-                          color: done ? null : const Color(0xFF05070C),
-                          gradient: done
-                              ? LinearGradient(
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                  colors: [
-                                    Color.lerp(
-                                      categoryTint,
-                                      Colors.white,
-                                      0.42,
-                                    )!,
-                                    categoryTint,
-                                    Color.lerp(
-                                      categoryTint,
-                                      Colors.black,
-                                      0.38,
-                                    )!,
-                                  ],
-                                )
-                              : null,
-                          boxShadow: done
-                              ? [
-                                  BoxShadow(
-                                    color: categoryTint.withOpacity(0.42),
-                                    blurRadius: 14,
-                                    spreadRadius: -2,
-                                    offset: const Offset(2, 0),
-                                  ),
-                                ]
-                              : null,
-                        ),
-                      ),
+            onTap: () => store.toggleCompleteToday(h.id),
+            onLongPress: () async {
+              final ok = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  backgroundColor: const Color(0xFF1A1B3A),
+                  title: const Text(
+                    'Remove habit?',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  content: Text(
+                    'Delete “${h.title}” and its history?',
+                    style: TextStyle(color: Colors.white.withOpacity(0.8)),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel'),
                     ),
-                    Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(pad, pad, 14, pad),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 68,
-                              height: 68,
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                  colors: [
-                                    categoryTint.withOpacity(0.32),
-                                    categoryTint.withOpacity(0.14),
-                                    const Color(0xFF0D2830).withOpacity(0.85),
-                                  ],
-                                ),
-                                borderRadius: BorderRadius.circular(18),
-                                border: Border.all(
-                                  color: categoryTint.withOpacity(0.72),
-                                  width: 1.75,
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: categoryTint.withOpacity(0.28),
-                                    blurRadius: 16,
-                                    offset: const Offset(0, 5),
-                                  ),
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.35),
-                                    blurRadius: 10,
-                                    offset: const Offset(0, 3),
-                                  ),
-                                ],
-                              ),
-                              child: Icon(
-                                icon,
-                                color: Color.lerp(
-                                  Colors.white,
-                                  categoryTint,
-                                  0.15,
-                                ),
-                                size: 32,
-                              ),
-                            ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    h.title,
-                                    style: GoogleFonts.inter(
-                                      color: Colors.white,
-                                      fontSize: 17,
-                                      fontWeight: FontWeight.w700,
-                                      height: 1.2,
-                                      letterSpacing: -0.2,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    'Streak: $streak days',
-                                    style: GoogleFonts.inter(
-                                      color: Colors.white.withOpacity(0.48),
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w500,
-                                      height: 1.2,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Container(
-                              width: 48,
-                              height: 48,
-                              alignment: Alignment.center,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: done ? categoryTint : Colors.transparent,
-                                border: Border.all(
-                                  color: categoryTint,
-                                  width: 2.5,
-                                ),
-                                boxShadow: done
-                                    ? [
-                                        BoxShadow(
-                                          color: categoryTint.withOpacity(0.45),
-                                          blurRadius: 12,
-                                          spreadRadius: 0,
-                                        ),
-                                      ]
-                                    : null,
-                              ),
-                              child: done
-                                  ? const Icon(
-                                      Icons.check_rounded,
-                                      color: Colors.white,
-                                      size: 26,
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('Delete'),
+                    ),
+                  ],
+                ),
+              );
+              if (ok == true) await store.removeHabit(h.id);
+            },
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(radius),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.45),
+                    blurRadius: 20,
+                    offset: const Offset(0, 10),
+                    spreadRadius: -4,
+                  ),
+                  if (done)
+                    BoxShadow(
+                      color: _kHabitCardTeal.withOpacity(0.22),
+                      blurRadius: 18,
+                      offset: const Offset(0, 6),
+                      spreadRadius: -2,
+                    ),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(radius),
+                child: Container(
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        Color(0xFF0F1628),
+                        Color(0xFF121C32),
+                        Color(0xFF152A45),
+                      ],
+                      stops: [0.0, 0.45, 1.0],
+                    ),
+                  ),
+                  child: IntrinsicHeight(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 16, 8, 16),
+                          child: Container(
+                            width: stripeW,
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(stripeW / 2),
+                              color: done ? null : const Color(0xFF05070C),
+                              gradient: done
+                                  ? LinearGradient(
+                                      begin: Alignment.topCenter,
+                                      end: Alignment.bottomCenter,
+                                      colors: [
+                                        Color.lerp(
+                                          categoryTint,
+                                          Colors.white,
+                                          0.42,
+                                        )!,
+                                        categoryTint,
+                                        Color.lerp(
+                                          categoryTint,
+                                          Colors.black,
+                                          0.38,
+                                        )!,
+                                      ],
                                     )
                                   : null,
+                              boxShadow: done
+                                  ? [
+                                      BoxShadow(
+                                        color: categoryTint.withOpacity(0.42),
+                                        blurRadius: 14,
+                                        spreadRadius: -2,
+                                        offset: const Offset(2, 0),
+                                      ),
+                                    ]
+                                  : null,
                             ),
-                          ],
+                          ),
                         ),
-                      ),
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(
+                              pad,
+                              pad,
+                              14,
+                              pad,
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 68,
+                                  height: 68,
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      begin: Alignment.topLeft,
+                                      end: Alignment.bottomRight,
+                                      colors: [
+                                        categoryTint.withOpacity(0.32),
+                                        categoryTint.withOpacity(0.14),
+                                        const Color(
+                                          0xFF0D2830,
+                                        ).withOpacity(0.85),
+                                      ],
+                                    ),
+                                    borderRadius: BorderRadius.circular(18),
+                                    border: Border.all(
+                                      color: categoryTint.withOpacity(0.72),
+                                      width: 1.75,
+                                    ),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: categoryTint.withOpacity(0.28),
+                                        blurRadius: 16,
+                                        offset: const Offset(0, 5),
+                                      ),
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.35),
+                                        blurRadius: 10,
+                                        offset: const Offset(0, 3),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Icon(
+                                    icon,
+                                    color: Color.lerp(
+                                      Colors.white,
+                                      categoryTint,
+                                      0.15,
+                                    ),
+                                    size: 32,
+                                  ),
+                                ),
+                                const SizedBox(width: 16),
+                                Expanded(
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        h.title,
+                                        style: GoogleFonts.inter(
+                                          color: Colors.white,
+                                          fontSize: 17,
+                                          fontWeight: FontWeight.w700,
+                                          height: 1.2,
+                                          letterSpacing: -0.2,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'Streak: $streak days',
+                                        style: GoogleFonts.inter(
+                                          color: Colors.white.withOpacity(0.48),
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w500,
+                                          height: 1.2,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Container(
+                                  width: 48,
+                                  height: 48,
+                                  alignment: Alignment.center,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: done
+                                        ? categoryTint
+                                        : Colors.transparent,
+                                    border: Border.all(
+                                      color: categoryTint,
+                                      width: 2.5,
+                                    ),
+                                    boxShadow: done
+                                        ? [
+                                            BoxShadow(
+                                              color: categoryTint.withOpacity(
+                                                0.45,
+                                              ),
+                                              blurRadius: 12,
+                                              spreadRadius: 0,
+                                            ),
+                                          ]
+                                        : null,
+                                  ),
+                                  child: done
+                                      ? const Icon(
+                                          Icons.check_rounded,
+                                          color: Colors.white,
+                                          size: 26,
+                                        )
+                                      : null,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
             ),
