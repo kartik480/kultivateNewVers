@@ -21,6 +21,7 @@ const db = db.getSiblingDB(dbName);
 const collectionNames = [
   'users',
   'habits',
+  'todo_list',
   'habit_completions',
   'user_stats_cache',
   'daily_rollups',
@@ -47,6 +48,9 @@ db.users.createIndex({ email: 1 }, { unique: true, name: 'users_email_unique' })
 db.habits.createIndex({ userId: 1, isArchived: 1 }, { name: 'habits_user_archived' });
 db.habits.createIndex({ userId: 1, createdAt: -1 }, { name: 'habits_user_created' });
 db.habits.createIndex({ userId: 1, category: 1 }, { name: 'habits_user_category' });
+
+// --- todo_list (user to-do list items only; separate from habits — Mongoose StandaloneTodo model) ---
+db.todo_list.createIndex({ userId: 1, createdAt: -1 }, { name: 'todo_list_user_created' });
 
 // --- habit_completions (daily check-ins) ---
 db.habit_completions.createIndex(

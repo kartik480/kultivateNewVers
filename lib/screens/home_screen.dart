@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:kultivate_new_ver/services/auth_service.dart';
 import 'package:kultivate_new_ver/services/habit_store.dart';
 import 'package:kultivate_new_ver/services/reminder_alarm_service.dart';
+import 'package:kultivate_new_ver/services/todo_store.dart';
 
 String _categoryForRadialLabel(String label) {
   switch (label) {
@@ -297,6 +298,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   final TextEditingController _manualReminderHabitCtrl =
       TextEditingController();
   final TextEditingController _manualReminderNoteCtrl = TextEditingController();
+  final TextEditingController _newTodoCtrl = TextEditingController();
   final List<_ManualReminder> _manualReminders = [];
   final List<_ReminderHistoryEntry> _reminderHistory = [];
 
@@ -622,6 +624,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     super.initState();
     HabitStore.instance.addListener(_onHabitStoreChanged);
     HabitStore.instance.ensureLoaded();
+    TodoStore.instance.ensureLoaded();
     unawaited(_loadRemindersState());
     // Animation controller that runs infinitely
     _waveController = AnimationController(
@@ -665,6 +668,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _statsPageController = PageController();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _refreshCompanionVideoForLevel();
+      unawaited(_resyncTodosIfLoggedIn());
     });
     unawaited(
       GoogleFonts.pendingFonts(<TextStyle>[
@@ -684,7 +688,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _statsPageController.dispose();
     _manualReminderHabitCtrl.dispose();
     _manualReminderNoteCtrl.dispose();
+    _newTodoCtrl.dispose();
     super.dispose();
+  }
+
+  /// Runs todo Mongo sync again when a JWT exists (handles logged-in sessions after cold start).
+  Future<void> _resyncTodosIfLoggedIn() async {
+    final t = await AuthService.getToken();
+    if (t == null || t.isEmpty) return;
+    await TodoStore.instance.resyncAfterAuth();
   }
 
   double _calculateOpacity(double maxHeight) {
@@ -1816,6 +1828,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   /// Shown under streak momentum habits — matches [AnimatedSwitcher] streak heading styles.
   Widget _buildStreakTodoListHeadingSection(BuildContext context) {
+    const accent = Color(0xFF00D9FF);
     return Padding(
       padding: const EdgeInsets.only(top: 22),
       child: Column(
@@ -1837,6 +1850,208 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               height: 1.25,
               color: Colors.white.withOpacity(0.58),
             ),
+          ),
+          const SizedBox(height: 14),
+          ListenableBuilder(
+            listenable: TodoStore.instance,
+            builder: (context, _) {
+              final todoStore = TodoStore.instance;
+              final dayKey = todoStore.todayKey;
+              void submitNew() {
+                final text = _newTodoCtrl.text;
+                unawaited(todoStore.addTask(text));
+                _newTodoCtrl.clear();
+                FocusScope.of(context).unfocus();
+              }
+
+              return Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: Colors.white.withOpacity(0.1)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _newTodoCtrl,
+                            maxLength: 160,
+                            maxLines: 1,
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.92),
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            cursorColor: accent,
+                            decoration: InputDecoration(
+                              isDense: true,
+                              counterText: '',
+                              hintText: 'Add a task…',
+                              hintStyle: TextStyle(
+                                color: Colors.white.withOpacity(0.38),
+                                fontWeight: FontWeight.w500,
+                              ),
+                              filled: true,
+                              fillColor: Colors.white.withOpacity(0.05),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(14),
+                                borderSide: BorderSide(
+                                  color: Colors.white.withOpacity(0.12),
+                                ),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(14),
+                                borderSide: BorderSide(
+                                  color: Colors.white.withOpacity(0.12),
+                                ),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(14),
+                                borderSide: const BorderSide(
+                                  color: accent,
+                                  width: 1.2,
+                                ),
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 10,
+                              ),
+                            ),
+                            textInputAction: TextInputAction.done,
+                            onSubmitted: (_) => submitNew(),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        TextButton(
+                          onPressed: submitNew,
+                          style: TextButton.styleFrom(
+                            foregroundColor: accent,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 10,
+                            ),
+                            textStyle: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                            ),
+                          ),
+                          child: const Text('Add'),
+                        ),
+                      ],
+                    ),
+                    if (todoStore.tasks.isEmpty) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        'No tasks yet — add quick errands or one-offs that are not part of your streak loop.',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.55),
+                          fontSize: 12,
+                          height: 1.35,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ] else ...[
+                      const SizedBox(height: 12),
+                      ...todoStore.tasks.map((task) {
+                        final done = task.isDoneOn(dayKey);
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(14),
+                              onTap: () => unawaited(todoStore.toggleDone(task.id)),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 8,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.04),
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(
+                                    color: Colors.white.withOpacity(0.08),
+                                  ),
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 1),
+                                      child: SizedBox(
+                                        width: 22,
+                                        height: 22,
+                                        child: Checkbox(
+                                          value: done,
+                                          activeColor: accent,
+                                          checkColor: const Color(0xFF0F1023),
+                                          side: BorderSide(
+                                            color: Colors.white.withOpacity(0.35),
+                                            width: 1.5,
+                                          ),
+                                          materialTapTargetSize:
+                                              MaterialTapTargetSize.shrinkWrap,
+                                          visualDensity: VisualDensity.compact,
+                                          onChanged: (_) => unawaited(
+                                            todoStore.toggleDone(task.id),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        task.title,
+                                        style: TextStyle(
+                                          color: done
+                                              ? Colors.white.withOpacity(0.45)
+                                              : Colors.white.withOpacity(0.9),
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
+                                          height: 1.3,
+                                          decoration: done
+                                              ? TextDecoration.lineThrough
+                                              : TextDecoration.none,
+                                          decorationColor: done
+                                              ? Colors.white.withOpacity(0.55)
+                                              : null,
+                                          decorationThickness: done ? 2 : null,
+                                        ),
+                                      ),
+                                    ),
+                                    IconButton(
+                                      onPressed: () =>
+                                          unawaited(todoStore.removeTask(task.id)),
+                                      icon: Icon(
+                                        Icons.close_rounded,
+                                        size: 20,
+                                        color: Colors.white.withOpacity(0.45),
+                                      ),
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(
+                                        minWidth: 32,
+                                        minHeight: 32,
+                                      ),
+                                      tooltip: 'Remove',
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      }),
+                    ],
+                  ],
+                ),
+              );
+            },
           ),
         ],
       ),

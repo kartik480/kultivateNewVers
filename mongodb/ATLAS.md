@@ -41,3 +41,13 @@ mongosh "mongodb+srv://USER:PASSWORD@CLUSTER.mongodb.net/?appName=kultitracker" 
 ## 5. Why localhost did not help Atlas
 
 Running the script against `mongodb://127.0.0.1:27017` only creates `kultitracker` on **your computer**, not on Atlas. Atlas is a **different server**; you must connect with the **`mongodb+srv://...`** string.
+
+## 6. `todo_list` is empty in Atlas (but the app shows tasks)
+
+The app **always** keeps a copy on the device. MongoDB is updated only when the **Node API** (`POST /api/todos` or `POST /api/todos/bootstrap`) runs against **the same** Atlas cluster your `.env` `MONGO_URI` points to.
+
+1. **Spelling:** The database name must be **`kultitracker`** (with **t**). A typo like `kulitracker` is a different database; you will see an empty `todo_list` there.
+2. **Wrong database in the URI:** If `MONGO_URI` has no path (or only `?`), the driver may use the default database **`test`**. In Atlas, open database **`test`** and look for collection **`todo_list`**. Fix the URI: `...mongodb.net/kultitracker?retryWrites=true&w=majority` (see repo `.env.example`).
+3. **Hosted app vs local API:** In debug, Flutter uses the **production** API URL unless you pass `--dart-define=API_BASE_URL=...`. Data written by **Render** goes to whatever `MONGO_URI` is on **Render**, not necessarily the same as your laptop’s `node server.js` `.env`. Redeploy the backend with `routes/todos.js` and check **Render → Logs** for lines like `todo_list insert` or `todo_list bootstrap`.
+4. **Not logged in:** Todos only sync with a **JWT** after login. Log in, then add a task or open Home so sync runs.
+5. **Dev console:** Run the Flutter app and watch **Debug console** for `GET /api/todos/state` / `Todo bootstrap` / `add todo HTTP` — that shows whether the API is reachable and what HTTP status you get.

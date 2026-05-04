@@ -3,6 +3,7 @@ import 'package:flutter/gestures.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:kultivate_new_ver/services/auth_service.dart';
 import 'package:kultivate_new_ver/services/habit_store.dart';
+import 'package:kultivate_new_ver/services/todo_store.dart';
 import '../screens/home_screen.dart';
 
 TextStyle _loginGeo({
@@ -157,6 +158,7 @@ class _LoginScreenState extends State<LoginScreen> {
     );
     if (err == null){
     await HabitStore.instance.applyLogin(email: emailController.text.trim());
+    await TodoStore.instance.resyncAfterAuth();
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
     SnackBar(
@@ -360,6 +362,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   displayName: nameController.text.trim(),
                   email: signUpEmailController.text.trim(),
                 );
+                await TodoStore.instance.resyncAfterAuth();
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: Text('Register successful', style: _loginGeo(fontWeight: FontWeight.w500)),

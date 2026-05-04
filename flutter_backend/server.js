@@ -10,6 +10,7 @@ const jwt = require("jsonwebtoken");
 const User = require("./models/User");
 const authRequired = require("./middleware/auth");
 const habitsRouter = require("./routes/habits");
+const todosRouter = require("./routes/todos");
 const statsCalendarRouter = require("./routes/statsCalendar");
 const remindersRouter = require("./routes/reminders");
 
@@ -32,16 +33,43 @@ if (!JWT_SECRET) {
 
 mongoose
   .connect(MONGO_URI)
-  .then(() => {
+  .then(async () => {
     console.log("DB connected:", mongoose.connection.name);
+    console.log(
+      "Mongo database name (documents go here):",
+      mongoose.connection.db?.databaseName ?? "(unknown)"
+    );
+    try {
+      const mdb = mongoose.connection.db;
+      const hasTodoList =
+        (await mdb.listCollections({ name: "todo_list" }).toArray()).length > 0;
+      if (!hasTodoList) {
+        await mdb.createCollection("todo_list");
+        console.log("Created MongoDB collection: todo_list");
+      }
+      // Same-key index may already exist as userId_1_createdAt_-1; avoid duplicate
+      // createIndex names here — StandaloneTodo model + init_indexes define indexes.
+    } catch (e) {
+      console.error("todo_list collection ensure failed:", e.message);
+    }
   })
   .catch((err) => {
     console.error("DB connection error:", err.message);
     process.exit(1);
-});
+  });
 
 app.get("/", (req, res) => {
-  res.send("Backend working");
+  res.type("text").send(
+    "Backend working. GET /api/meta to verify the deployed build includes the todos API."
+  );
+});
+
+/// No auth — use after deploy: `curl https://<host>/api/meta` should show `"todos": true`.
+app.get("/api/meta", (req, res) => {
+  res.json({
+    ok: true,
+    features: { todos: true, habits: true, reminders: true, stats: true },
+  });
 });
 
 app.post("/register", async (req, res) => {
@@ -132,6 +160,7 @@ app.post("/login", async (req, res) => {
 });
 
 app.use("/api/habits", authRequired, habitsRouter);
+app.use("/api/todos", authRequired, todosRouter);
 app.use("/api/me", authRequired, statsCalendarRouter);
 app.use("/api/reminders", authRequired, remindersRouter);
 
