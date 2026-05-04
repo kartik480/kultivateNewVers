@@ -2010,18 +2010,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                         task.title,
                                         style: TextStyle(
                                           color: done
-                                              ? Colors.white.withOpacity(0.45)
+                                              ? Colors.white.withOpacity(0.42)
                                               : Colors.white.withOpacity(0.9),
                                           fontSize: 14,
                                           fontWeight: FontWeight.w600,
-                                          height: 1.3,
+                                          height: 1.35,
                                           decoration: done
                                               ? TextDecoration.lineThrough
                                               : TextDecoration.none,
+                                          decorationStyle:
+                                              TextDecorationStyle.solid,
                                           decorationColor: done
-                                              ? Colors.white.withOpacity(0.55)
+                                              ? const Color(0xFFB8C4FF)
+                                                  .withOpacity(0.95)
                                               : null,
-                                          decorationThickness: done ? 2 : null,
+                                          decorationThickness: done ? 2.75 : null,
                                         ),
                                       ),
                                     ),
