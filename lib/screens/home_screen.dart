@@ -4180,10 +4180,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       );
       await player.setReleaseMode(ReleaseMode.loop);
       await player.setVolume(1.0);
-      await player.play(AssetSource('sound/glory.mp3'));
-      if (player.state != PlayerState.playing) {
-        await player.resume();
-      }
+      await player.setSourceAsset('sound/glory.mp3');
+      await player.resume();
       soundStarted = player.state == PlayerState.playing;
     } catch (e, st) {
       debugPrint('timer glory sound: $e\n$st');
