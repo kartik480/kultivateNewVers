@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/services.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ui';
@@ -305,6 +306,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   final List<_ReminderHistoryEntry> _reminderHistory = [];
   final Map<String, int> _habitTimerInitialById = {};
   final Map<String, int> _habitTimerRemainingById = {};
+  AudioPlayer? _timerAlarmPlayer;
 
   int _alarmIdForReminder({
     required DateTime createdAt,
@@ -693,6 +695,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _manualReminderHabitCtrl.dispose();
     _manualReminderNoteCtrl.dispose();
     _newTodoCtrl.dispose();
+    _timerAlarmPlayer?.dispose();
     super.dispose();
   }
 
@@ -3933,8 +3936,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               content: TextField(
                                 controller: ctrl,
                                 keyboardType: TextInputType.number,
+                                textInputAction: TextInputAction.done,
                                 style: const TextStyle(color: Colors.white),
-                                autofocus: true,
+                                // Avoid simulator freeze/jank from nested modal autofocus.
+                                autofocus: false,
                                 decoration: InputDecoration(
                                   hintText: '1-120',
                                   hintStyle: TextStyle(
@@ -4139,12 +4144,58 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }) async {
     if (!mounted) return;
 
-    final player = AudioPlayer();
+    _timerAlarmPlayer ??= AudioPlayer(playerId: 'habit-time-up');
+    final player = _timerAlarmPlayer!;
+    var soundStarted = false;
+    Timer? fallbackTicker;
+
+    Future<void> triggerFallbackAlert() async {
+      try {
+        await SystemSound.play(SystemSoundType.alert);
+      } catch (_) {}
+      try {
+        await HapticFeedback.heavyImpact();
+      } catch (_) {}
+    }
+
     try {
+      await player.stop();
+      await player.setAudioContext(
+        AudioContext(
+          android: AudioContextAndroid(
+            isSpeakerphoneOn: true,
+            stayAwake: true,
+            contentType: AndroidContentType.music,
+            usageType: AndroidUsageType.alarm,
+            audioFocus: AndroidAudioFocus.gain,
+          ),
+          iOS: AudioContextIOS(
+            category: AVAudioSessionCategory.playback,
+            options: <AVAudioSessionOptions>{
+              AVAudioSessionOptions.defaultToSpeaker,
+              AVAudioSessionOptions.mixWithOthers,
+            },
+          ),
+        ),
+      );
       await player.setReleaseMode(ReleaseMode.loop);
+      await player.setVolume(1.0);
       await player.play(AssetSource('sound/glory.mp3'));
+      if (player.state != PlayerState.playing) {
+        await player.resume();
+      }
+      soundStarted = player.state == PlayerState.playing;
     } catch (e, st) {
       debugPrint('timer glory sound: $e\n$st');
+    }
+
+    if (!soundStarted) {
+      await triggerFallbackAlert();
+      // Emulators/simulators often suppress asset audio. Keep a lightweight
+      // fallback pulse alive while the dialog is visible.
+      fallbackTicker = Timer.periodic(const Duration(seconds: 2), (_) {
+        unawaited(triggerFallbackAlert());
+      });
     }
 
     try {
@@ -4255,10 +4306,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         },
       );
     } finally {
-      try {
-        await player.stop();
-      } catch (_) {}
-      await player.dispose();
+      fallbackTicker?.cancel();
+      if (soundStarted) {
+        try {
+          await player.stop();
+        } catch (_) {}
+      }
     }
   }
 
