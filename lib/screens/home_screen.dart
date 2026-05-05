@@ -13,6 +13,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:kultivate_new_ver/screens/login_screen.dart';
 import 'package:kultivate_new_ver/services/auth_service.dart';
 import 'package:kultivate_new_ver/services/habit_store.dart';
 import 'package:kultivate_new_ver/services/reminder_alarm_service.dart';
@@ -706,6 +707,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     await TodoStore.instance.resyncAfterAuth();
   }
 
+  Future<void> _logout() async {
+    await AuthService.saveToken(null);
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute<void>(builder: (_) => const LoginScreen()),
+      (route) => false,
+    );
+  }
+
   double _calculateOpacity(double maxHeight) {
     double opacity =
         1.0 - ((_navBarHeight - _minHeight) / (maxHeight * 0.6 - _minHeight));
@@ -1266,6 +1276,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                             size: 22,
                                           ),
                                           onPressed: _showHabitTeacherBotPanel,
+                                        ),
+                                        TextButton.icon(
+                                          onPressed: _logout,
+                                          icon: const Icon(
+                                            Icons.logout_rounded,
+                                            color: Color(0xFF00D9FF),
+                                            size: 18,
+                                          ),
+                                          label: Text(
+                                            'Logout',
+                                            style: GoogleFonts.geologica(
+                                              color: const Color(0xFF00D9FF),
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
                                         ),
                                       ],
                                     ),
@@ -4173,15 +4199,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             category: AVAudioSessionCategory.playback,
             options: <AVAudioSessionOptions>{
               AVAudioSessionOptions.defaultToSpeaker,
-              AVAudioSessionOptions.mixWithOthers,
             },
           ),
         ),
       );
+      await player.setPlayerMode(PlayerMode.mediaPlayer);
       await player.setReleaseMode(ReleaseMode.loop);
       await player.setVolume(1.0);
       await player.setSourceAsset('sound/glory.mp3');
+      await player.seek(Duration.zero);
       await player.resume();
+      if (player.state != PlayerState.playing) {
+        await player.play(AssetSource('sound/glory.mp3'));
+      }
       soundStarted = player.state == PlayerState.playing;
     } catch (e, st) {
       debugPrint('timer glory sound: $e\n$st');

@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:kultivate_new_ver/screens/home_screen.dart';
 import 'package:kultivate_new_ver/screens/motivation_start_screen.dart';
+import 'package:kultivate_new_ver/services/auth_service.dart';
 
 /// Cold-open ritual before auth: orbital sigil, gradient wordmark, tap-to-skip.
 class SplashScreen extends StatefulWidget {
@@ -58,14 +60,16 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     _goNext();
   }
 
-  void _goNext() {
+  Future<void> _goNext() async {
     if (_left) return;
     _left = true;
+    final token = await AuthService.getToken();
+    final hasSession = token != null && token.trim().isNotEmpty;
     Navigator.of(context).pushReplacement(
       PageRouteBuilder<void>(
         transitionDuration: const Duration(milliseconds: 640),
         pageBuilder: (context, animation, secondaryAnimation) {
-          return const MotivationStartScreen();
+          return hasSession ? const HomeScreen() : const MotivationStartScreen();
         },
         transitionsBuilder: (context, animation, _, child) {
           return FadeTransition(
@@ -94,7 +98,9 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
       body: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: () {
-          if (_intro.value >= 0.2) _goNext();
+          if (_intro.value >= 0.2) {
+            unawaited(_goNext());
+          }
         },
         child: Stack(
           fit: StackFit.expand,
